@@ -164,7 +164,7 @@ def build(base, library, signer, output, host_dll=None, touch_dll=None, lidgren_
         prepare_binary(fw/FRAMEWORK, sig_capacity=48*1024)
         (fw/"Info.plist").write_bytes(plistlib.dumps(dict(CFBundleExecutable=FRAMEWORK,
             CFBundleName=FRAMEWORK,CFBundleIdentifier="dev.stardewmobile.gardenkit",
-            CFBundlePackageType="FMWK",CFBundleVersion="111",CFBundleShortVersionString="1.1.1",
+            CFBundlePackageType="FMWK",CFBundleVersion="112",CFBundleShortVersionString="1.1.2",
             MinimumOSVersion=min_ios,CFBundleSupportedPlatforms=["iPhoneOS"])))
         # Remove stale debug get-task-allow archived-expanded-entitlements.xcent (can conflict with Enterprise/TXM signers on iOS 26/27)
         stale_xcent = app / "archived-expanded-entitlements.xcent"
@@ -210,8 +210,8 @@ def build(base, library, signer, output, host_dll=None, touch_dll=None, lidgren_
         info = plistlib.loads((app/"Info.plist").read_bytes())
         info.update(
             MinimumOSVersion=min_ios,
-            CFBundleShortVersionString="1.1.1",
-            CFBundleVersion="1.1.1",
+            CFBundleShortVersionString="1.1.2",
+            CFBundleVersion="1.1.2",
             UIFileSharingEnabled=True,
             LSSupportsOpeningDocumentsInPlace=True,
             UIApplicationSupportsIndirectInputEvents=True,
@@ -262,7 +262,7 @@ def build(base, library, signer, output, host_dll=None, touch_dll=None, lidgren_
             icon_src = mod_root / "GardenLauncherIcons"
             if icon_src.is_dir():
                 shutil.rmtree(app / "AppIcons", ignore_errors=True)
-                for stale_icon in list(app.glob("iTunesArtwork*")) + list(app.glob("AppIcon512*")) + list(app.glob("AppIcon1024*")):
+                for stale_icon in list(app.glob("iTunesArtwork*")) + list(app.glob("AppIcon512*")) + list(app.glob("AppIcon1024*")) + list(app.glob("AppIcon-1024*")):
                     stale_icon.unlink(missing_ok=True)
                 allowed_prefixes = (
                     "AppIcon20x20",

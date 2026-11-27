@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 
+static inline void sdvSetAuroraBackdropEnabled(BOOL enabled);
+
 @interface SDVUiConfig : NSObject
 // Menu Bar
 @property(nonatomic, assign) float menuBarScale;
@@ -280,6 +282,8 @@ static long long sdvNextRev(void) {
 @property(nonatomic, assign) float toolbarY; // 0.0..1.0 (vertical position)
 @property(nonatomic, assign) BOOL showToolHitLocation; // Default YES
 @property(nonatomic, assign) NSInteger batterySaverFpsMode; // 0=60 FPS, 1=30 FPS, 2=45 FPS
+@property(nonatomic, assign) BOOL menuFps30; // Default NO (60 FPS smooth in-game menus), YES = 30 FPS battery saver
+@property(nonatomic, assign) BOOL auroraBackdrop; // Default YES (living Aurora backdrop in Mod Garden)
 @property(nonatomic, assign) float pixelOpacity; // 0.25..1.00
 @property(nonatomic, assign) BOOL leftHandedMobile;
 @property(nonatomic, assign) float joyDeadzone; // 0.05..0.25
@@ -332,6 +336,8 @@ static long long sdvNextRev(void) {
     c.toolbarY = 0.50f;
     c.showToolHitLocation = YES;
     c.batterySaverFpsMode = 0;
+    c.menuFps30 = NO;
+    c.auroraBackdrop = YES;
     c.pixelOpacity = 1.00f;
     c.leftHandedMobile = NO;
     c.joyDeadzone = 0.11f;
@@ -431,6 +437,10 @@ static long long sdvNextRev(void) {
             if ([lv isEqualToString:@"2"] || [lv isEqualToString:@"45"]) c.batterySaverFpsMode = 2;
             else if ([lv isEqualToString:@"1"] || [lv isEqualToString:@"true"] || [lv isEqualToString:@"30"]) c.batterySaverFpsMode = 1;
             else c.batterySaverFpsMode = 0;
+        } else if ([k isEqualToString:@"menufps30"]) {
+            c.menuFps30 = ([v isEqualToString:@"1"] || [v.lowercaseString isEqualToString:@"true"]);
+        } else if ([k isEqualToString:@"aurora"]) {
+            c.auroraBackdrop = ([v isEqualToString:@"1"] || [v.lowercaseString isEqualToString:@"true"]);
         } else if ([k isEqualToString:@"pixelopacity"]) {
             c.pixelOpacity = sdvClampf(v.floatValue, 0.25f, 1.00f);
         } else if ([k isEqualToString:@"lefthanded"]) {
@@ -456,6 +466,7 @@ static long long sdvNextRev(void) {
             }
         }
     }
+    sdvSetAuroraBackdropEnabled(c.auroraBackdrop);
     return c;
 }
 
@@ -535,7 +546,7 @@ static long long sdvNextRev(void) {
     }
 
     NSMutableString *s = [NSMutableString stringWithFormat:
-        @"mode=%ld\nautotool=%d\nautoattack=%d\npinchzoom=%d\ntouchhint2=%d\ntoputility=%d\nswapbuttons=%d\nmobileshopdrag=%d\nautokeyboard=%d\nsafecrafting=%d\nautosavemin=%ld\nreduceweather=%d\nuiscale=%.2f\nbuttonscale=%.2f\nemotebtn=%d\nautorepeat=%d\nrestoretool=%d\nspecbtn=%d\nautocombatmode=%d\nautohidegp=%d\nautopause=%d\nfishhaptic=%d\nsafepadding=%ld\nsafedialogue=%d\nverticaltb=%d\ntbsize=%.2f\ntbopacity=%.2f\ntbcols=%ld\ntbrows=%ld\ntbside=%ld\ntby=%.3f\ntoolhitbox=%d\nsaver30fps=%d\npixelopacity=%.2f\nlefthanded=%d\njoydeadzone=%.2f\nrespectmute=%d\npuregamepad=%d\n",
+        @"mode=%ld\nautotool=%d\nautoattack=%d\npinchzoom=%d\ntouchhint2=%d\ntoputility=%d\nswapbuttons=%d\nmobileshopdrag=%d\nautokeyboard=%d\nsafecrafting=%d\nautosavemin=%ld\nreduceweather=%d\nuiscale=%.2f\nbuttonscale=%.2f\nemotebtn=%d\nautorepeat=%d\nrestoretool=%d\nspecbtn=%d\nautocombatmode=%d\nautohidegp=%d\nautopause=%d\nfishhaptic=%d\nsafepadding=%ld\nsafedialogue=%d\nverticaltb=%d\ntbsize=%.2f\ntbopacity=%.2f\ntbcols=%ld\ntbrows=%ld\ntbside=%ld\ntby=%.3f\ntoolhitbox=%d\nsaver30fps=%d\nmenufps30=%d\naurora=%d\npixelopacity=%.2f\nlefthanded=%d\njoydeadzone=%.2f\nrespectmute=%d\npuregamepad=%d\n",
         (long)MAX(1, MIN(4, self.mode)), self.autoTool ? 1 : 0, self.autoAttack ? 1 : 0,
         self.pinchZoom ? 1 : 0, self.showTouchHint ? 1 : 0,
         self.showTopUtility ? 1 : 0, self.swapRightButtons ? 1 : 0,
@@ -558,9 +569,12 @@ static long long sdvNextRev(void) {
         sdvClampf(self.toolbarY, 0.0f, 1.0f),
         self.showToolHitLocation ? 1 : 0,
         (int)MAX(0, MIN(2, self.batterySaverFpsMode)),
+        self.menuFps30 ? 1 : 0,
+        self.auroraBackdrop ? 1 : 0,
         sdvClampf(self.pixelOpacity, 0.25f, 1.00f), self.leftHandedMobile ? 1 : 0,
         sdvClampf(self.joyDeadzone, 0.05f, 0.25f), self.respectMuteSwitch ? 1 : 0,
         self.pureGamepadMode ? 1 : 0];
+    sdvSetAuroraBackdropEnabled(self.auroraBackdrop);
     for (NSString *ex in extraLines) {
         [s appendFormat:@"%@\n", ex];
     }

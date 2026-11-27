@@ -1,7 +1,7 @@
 {
   "Name": "Garden Mobile Controls",
   "Author": "Garden Launcher",
-  "Version": "1.1.1",
+  "Version": "1.1.2",
   "Description": "Native Stardew Valley Mobile-style touch controls for iOS (Invisible/Visible Floating Joystick + 2 Buttons, Tap-to-Move A*, Auto-Tool, optional Auto-Attack, Pinch-to-Zoom, Menu Swipe Scroll).",
   "UniqueID": "GardenLauncher.MobileControls",
   "EntryDll": "SDVMobileControls.dll",

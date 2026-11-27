@@ -1,18 +1,18 @@
 {
-  "version": "1.1.1",
-  "build": 11100,
-  "min_ipa_build": 11100,
-  "date": "2026-11-26",
+  "version": "1.1.2",
+  "build": 11200,
+  "min_ipa_build": 11200,
+  "date": "2026-11-27",
   "discord_url": "https://discord.gg/tuTKv9xQ2Z",
-  "release_url": "https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/tag/v1.1.1",
-  "ios14_url": "https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.1/Garden-Launcher-1.1.1-iOS14-18.ipa",
-  "ios26_url": "https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.1/Garden-Launcher-1.1.1-iOS26-27.ipa",
+  "release_url": "https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/tag/v1.1.2",
+  "ios14_url": "https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.2/Garden-Launcher-1.1.2-iOS14-18.ipa",
+  "ios26_url": "https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.2/Garden-Launcher-1.1.2-iOS26-27.ipa",
   "hotpatch_url": "",
   "hotpatch_sha256": "",
   "hotpatch_size": 0,
   "summary": [
-    "Sửa khẩn cấp lỗi #GL-V53YS2 trên v1.1.0 khiến ảnh nhà nông trại (Buildings/houses) và các texture Content Patcher bị giữ nguyên ảnh gốc vanilla hoặc lộ phần mái nhà tầng 2 dưới bậc thềm (gỡ nhánh GL.BlitFramebuffer vốn bị khung cắt GL_SCISSOR_TEST của LoadGameMenu cắt trắng pixel, khôi phục nhánh GetData/SetData miễn nhiễm Scissor & giữ nguyên try/finally FBO).",
-    "Sửa lỗi syncBundledSmapi báo dll-hash-mismatch ở mỗi lần mở app (do RuntimeSmapiPatcher vá StardewModdingAPI.dll tại chỗ) để bộ nhớ đệm khởi động nhanh .garden/patch_stamps hoạt động thực sự từ lần mở thứ 2 trở đi.",
-    "Giữ trọn vẹn toàn bộ tính năng v1.1.0: IPA siêu gọn 25.13 MB, 6 công cụ Mod Garden mới (Hồ sơ Mod & Safe Mode, Offline config.json Editor, Sửa Hoa/Thường APFS, Tự gắn phím tắt Mod, Quản lý QuickSave/20 ô lưu nhanh, Mã #COOP) & hoàn thiện Gameplay 1.6.15."
+    "Mở khóa 60 FPS mặc định cho Menu trong game (Balô, Rương, Shop) kèm nút chọn 60 FPS (Mượt) / 30 FPS (Tiết kiệm) trong Mod Garden; mở khóa toàn bộ Menu Mod Garden lên 60/120 FPS (tự tạm dừng game loop khi mở ở Chơi đơn, vẫn giữ mạng khi Co-op) và thêm công tắc bật/tắt hiệu ứng nền Cực Quang (Aurora).",
+    "Tối ưu siêu mượt kéo-thả vật phẩm Balô (0 lần ngắt SpriteBatch, ngưỡng kéo nhạy hơn, cache tooltip 0 GC) và sửa khựng di chuyển Mobile nhờ vá khớp nhịp VSync 2.0ms trong MonoGame Game.Tick(), làm mượt đường đi A* bo góc (Lookahead) và chống rung 8 hướng cần điều khiển.",
+    "Tích hợp 5 cải tiến ổn định, Font Việt hóa (.fnt), Chân dung NPC & Crash Log từ @Mudkip267 (Nguyễn Ngọc Nguyên): gỡ GC.WaitForPendingFinalizers() chống treo khi thoát về Title, bảo vệ font & gói CP chân dung/Việt hóa khi dọn RAM, làm mới chân dung khi chuyển map, lưu 16 dòng SMAPI cuối trong Crash Log và chốt poll tay cầm 1 lần/tick."
   ]
 }

@@ -1488,11 +1488,9 @@ namespace SDVMobileControls
             }
             int tick = Game1.ticks;
             long nowMs = Environment.TickCount64;
-            if (tick == _lastPollTick && nowMs - _lastPollMs < 3)
+            if (tick == _lastPollTick)
             {
                 if (directTouchCount > 0) NotifyDirectTouch(directTouchCount);
-                ApplyStardewGamepadMode();
-                SyncDirectZeroHarmonyInputStates();
                 return;
             }
             _lastPollTick = tick;
@@ -1672,6 +1670,8 @@ namespace SDVMobileControls
 
         public void SyncDirectZeroHarmonyInputStates()
         {
+            if (!ShouldPushMouseStateNow && !IsPhysicalGamepadActive)
+                return;
             try
             {
                 InputState inp = Game1.input;
@@ -1844,6 +1844,19 @@ namespace SDVMobileControls
                 new GamePadDPad(dUp, dDown, dLeft, dRight));
         }
 
+        public GamePadState GetStateForMonoGameHook(int index)
+        {
+            if (index != 0)
+                return default;
+            try
+            {
+                if (IsPhysicalGamepadActive)
+                    return GetEffectiveGamePadStateForGame();
+            }
+            catch { }
+            return default;
+        }
+
         public GamePadState PollAndGetStateForMonoGameHook(int index)
         {
             if (index != 0)
@@ -1856,6 +1869,26 @@ namespace SDVMobileControls
             }
             catch { }
             return default;
+        }
+
+        public void OnReturnedToTitle()
+        {
+            _lastPollTick = -1;
+            _lastPollMs = 0;
+            IsRightStickSteeringGameplayCursor = false;
+            IsRightStickMenuCursorActive = false;
+            SuppressGamepadAButtonThisFrame = false;
+            SuppressGamepadXButtonThisFrame = false;
+            SuppressGamepadShoulderThisFrame = false;
+            SuppressGamepadTriggerThisFrame = false;
+            _menuSyntheticLeftClickFrames = 0;
+            _menuSyntheticRightClickFrames = 0;
+            _rStickModHoldLeftDown = false;
+            _rStickModHoldRightDown = false;
+            _gpDragTracking = false;
+            _gpDragMoved = false;
+            _lastRightStickStepMs = 0;
+            PushRumbleToNative(0f, 0f);
         }
 
         private void SyncMonoGameKeyboardKeys(bool forceClear = false)

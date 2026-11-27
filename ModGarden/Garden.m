@@ -692,21 +692,28 @@ static NSUInteger syncContentPackLocaleFallbacks(NSString *docsPath) {
                     [nameLow containsString:@"việt hóa"] || [nameLow containsString:@"vietnamese"] ||
                     [nameLow containsString:@"viethoa"]) continue;
 
-        // Fast pre-check: inspect content.json + non-asset JSONs BEFORE walking huge assets/ trees!
+                // Fast pre-check: inspect content.json first; only scan sub-JSONs when content.json uses Include
+                // (avoids walking huge assets/ trees unless included JSONs exist; @autoreleasepool caps memory — credit @Mudkip267)
                 NSData *rootCj = [NSData dataWithContentsOfFile:join(packDir, @"content.json") options:NSDataReadingMappedIfSafe error:nil];
                 BOOL usesLanguageToken = NO;
+                BOOL hasIncludeAction = NO;
                 if (rootCj.length > 0 && rootCj.length <= 2 * 1024 * 1024) {
                     NSString *cjs = [[NSString alloc] initWithData:rootCj encoding:NSUTF8StringEncoding];
-                    if (cjs && [cjs rangeOfString:@"{{language}}" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-                        usesLanguageToken = YES;
+                    if (cjs) {
+                        if ([cjs rangeOfString:@"{{language}}" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                            usesLanguageToken = YES;
+                        } else if ([cjs rangeOfString:@"\"Include\"" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                            hasIncludeAction = YES;
+                        }
                     }
                 }
-                if (!usesLanguageToken) {
+                if (!usesLanguageToken && hasIncludeAction) {
                     NSDirectoryEnumerator *je = [fm() enumeratorAtPath:packDir];
-                    for (NSString *jRel in je) {
+                    NSString *jRel = nil;
+                    while ((jRel = [je nextObject])) { @autoreleasepool {
                         NSString *ft = je.fileAttributes.fileType;
                         NSString *topSub = jRel.pathComponents.firstObject.lowercaseString;
-                        if ([ft isEqualToString:NSFileTypeDirectory] && ([topSub isEqualToString:@"assets"] || [topSub isEqualToString:@"i18n"])) {
+                        if ([ft isEqualToString:NSFileTypeDirectory] && [topSub isEqualToString:@"i18n"]) {
                             [je skipDescendants];
                             continue;
                         }
@@ -720,18 +727,18 @@ static NSUInteger syncContentPackLocaleFallbacks(NSString *docsPath) {
                                 break;
                             }
                         }
-                    }
+                    }}
                 }
                 if (!usesLanguageToken) continue;
 
                 NSMutableArray<NSString *> *packFiles = [NSMutableArray array];
                 NSDirectoryEnumerator *fe = [fm() enumeratorAtPath:packDir];
                 NSString *fRel = nil;
-                while ((fRel = [fe nextObject])) {
+                while ((fRel = [fe nextObject])) { @autoreleasepool {
                     if ([fe.fileAttributes.fileType isEqualToString:NSFileTypeRegular]) {
                         [packFiles addObject:fRel];
                     }
-                }
+                }}
 
                 // Create 0-byte APFS copy-on-write clones (*.en.<ext> -> *.vi.<ext>, *_en.<ext> -> *_vi.<ext>, en/ -> vi/)
                 // Uses copyItemAtPath (APFS clonefile, st_nlink=1) instead of linkItemAtPath (hardlink st_nlink=2 breaks iOS AFC).
@@ -2972,7 +2979,7 @@ static NSDictionary *plan(NSString *root, NSString *stage, NSArray *preferences,
             return i > 0 && [s.lowercaseString isEqualToString:@"content"];
         }];
         if (contentIdx != NSNotFound && contentIdx + 1 < parts.count) {
-            if ([extLow isEqualToString:@"xnb"] || [extLow isEqualToString:@"json"] || [extLow isEqualToString:@"png"] || [extLow isEqualToString:@"tmx"] || [extLow isEqualToString:@"yaml"]) {
+            if ([extLow isEqualToString:@"xnb"] || [extLow isEqualToString:@"json"] || [extLow isEqualToString:@"png"] || [extLow isEqualToString:@"tmx"] || [extLow isEqualToString:@"yaml"] || [extLow isEqualToString:@"fnt"]) {
                 NSString *subRel = [NSString pathWithComponents:[parts subarrayWithRange:NSMakeRange(contentIdx + 1, parts.count - contentIdx - 1)]];
                 NSString *fnLow = r.lastPathComponent.lowercaseString;
                 // Protect PC Content UI XNBs from Android/Mobile optional XNB folders bundled inside a Content Patcher ZIP
@@ -3158,8 +3165,8 @@ static NSDictionary *plan(NSString *root, NSString *stage, NSArray *preferences,
 // ============================================================================
 // GARDEN LAUNCHER UPDATE CHECKER + OTA HOT-PATCH ENGINE (0% IPA Re-Signing!)
 // ============================================================================
-#define kSDVAppVersion @"1.1.1"
-#define kSDVAppBuild   11100
+#define kSDVAppVersion @"1.1.2"
+#define kSDVAppBuild   11200
 static NSString *const kSDVUpdateNotification = @"SDVLauncherUpdateDidChangeNotification";
 static NSString *const kSDVDismissedUpdatePrefKey = @"sdv_dismissed_update_id";
 static NSString *const kSDVDefaultDiscordURL = @"https://discord.gg/tuTKv9xQ2Z";

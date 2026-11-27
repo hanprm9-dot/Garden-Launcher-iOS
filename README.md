@@ -4,7 +4,7 @@
   <p><b>Launcher &amp; Mod Manager cho Stardew Valley PC 1.6.15 trên iOS &amp; iPadOS</b></p>
 
   <p>
-    <a href="https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/tag/v1.1.1"><img src="https://img.shields.io/badge/Version-v1.1.1-2ea44f?style=flat-square" alt="Version v1.1.1" /></a>
+    <a href="https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/tag/v1.1.2"><img src="https://img.shields.io/badge/Version-v1.1.2-2ea44f?style=flat-square" alt="Version v1.1.2" /></a>
     <a href="https://discord.gg/tuTKv9xQ2Z"><img src="https://img.shields.io/badge/Discord-Vườn%20Bách%20Thú-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord Server" /></a>
     <img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-14%20–%2027+-007aff?style=flat-square&logo=apple&logoColor=white" alt="iOS & iPadOS 14-27+" />
     <img src="https://img.shields.io/badge/SMAPI-4.5.2-6f42c1?style=flat-square" alt="SMAPI 4.5.2" />
@@ -19,16 +19,23 @@
 
 ---
 
-## 📥 Tải xuống (`v1.1.1`)
+## 📥 Tải xuống (`v1.1.2`)
 
 | Thiết bị | Phiên bản IPA | Tải về |
 | :--- | :--- | :---: |
-| **iOS / iPadOS 14 – 18** | `Garden-Launcher-1.1.1-iOS14-18.ipa` | [**⬇️ Tải ngay**](https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.1/Garden-Launcher-1.1.1-iOS14-18.ipa) |
-| **iOS / iPadOS 26 – 27+** | `Garden-Launcher-1.1.1-iOS26-27.ipa` | [**⬇️ Tải ngay**](https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.1/Garden-Launcher-1.1.1-iOS26-27.ipa) |
+| **iOS / iPadOS 14 – 18** | `Garden-Launcher-1.1.2-iOS14-18.ipa` | [**⬇️ Tải ngay**](https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.2/Garden-Launcher-1.1.2-iOS14-18.ipa) |
+| **iOS / iPadOS 26 – 27+** | `Garden-Launcher-1.1.2-iOS26-27.ipa` | [**⬇️ Tải ngay**](https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.2/Garden-Launcher-1.1.2-iOS26-27.ipa) |
 
 ---
 
-## ✨ Điểm mới nổi bật trong `v1.1.1`, `v1.1.0` & `v1.0.8`
+## ✨ Điểm mới nổi bật trong `v1.1.2`, `v1.1.1` & `v1.1.0`
+
+- **⚡ Siêu Mượt `v1.1.2` — Mở Khóa 60/120 FPS Menu, Kéo-Thả Balô & Di Chuyển Mobile Không Khựng + 5 Cải Tiến Từ `@Mudkip267`:**
+  - **Mở khóa 60 FPS mặc định cho Menu trong game & Tùy chọn `60 / 30 FPS`:** Gỡ giới hạn khóa cứng `30 FPS` mặc định khi mở Balô, Rương, Cửa hàng và thêm nút chuyển trực tiếp **`60 FPS (Mượt)` / `30 FPS (Tiết kiệm)`** trong **Mod Garden → FPS, Thời tiết & Pin** (không cần khởi động lại game).
+  - **Menu Mod Garden 60 / 120 FPS (ProMotion) & Công tắc nền Cực Quang (Aurora):** Tự động tạm dừng `CADisplayLink` của game nền khi mở toàn màn hình Mod Garden ở chế độ Chơi đơn (trong Co-op Multiplayer vẫn giữ nhịp mạng và tự `SuppressDraw()` giảm tải GPU, tự động `ResetElapsedTime()` khi đóng) để thao tác cuộn/bấm trong Mod Garden đạt trọn vẹn **60 / 120 Hz**; bổ sung công tắc bật/tắt hiệu ứng nền động **Aurora** tức thì.
+  - **Kéo-thả vật phẩm Balô & Rương 0-Flush:** Loại bỏ 3 lần ngắt `SpriteBatch.End()/Begin()` mỗi khung hình khi kéo vật phẩm, hạ ngưỡng kéo Balô nhạy hơn (`14px`, giữ `24px` cho Rương để cuộn mượt), thêm bộ đệm hover & chuỗi tooltip không cấp phát rác GC.
+  - **Di chuyển Mobile 60Hz mượt tuyệt đối:** Vá khớp nhịp VSync **2.0 ms** trong `MonoGame.Framework.dll` (`Game.Tick()`) để triệt tiêu vòng lặp `Thread.Sleep(1)` gây trượt nhịp khung hình và nhảy `2× DoUpdate` trên iOS; nâng cấp **Làm mượt đường đi A\* (Lookahead Path Smoothing)** rút gọn điểm thẳng hàng & bo góc an toàn, bộ lọc **8 hướng có độ trễ chống rung (`Schmitt-trigger`)** cho joystick ảo và cache bố cục HUD (`ComputeLayout`) theo `Revision`.
+  - **5 cải tiến ổn định, Font Việt hóa, Chân dung & Crash Log (đóng góp bởi [`@Mudkip267` — Nguyễn Ngọc Nguyên](https://github.com/Mudkip267/Garden-Launcher-iOS)):** Gỡ bỏ 2 lệnh `GC.WaitForPendingFinalizers()` chặn luồng + dọn trạng thái khi thoát về màn hình chính (`ReturnedToTitle`); hỗ trợ tệp font `.fnt` trong `Content/`, bảo vệ font Việt hóa (`smallFont`, `dialogueFont`, `minhhien`, `spritefont`) & thêm `@autoreleasepool` / kiểm tra `"Include"` khi đồng bộ locale; làm mới chân dung NPC khi chuyển map (`OnWarped`) và miễn trừ các gói CP chân dung/Việt hóa/font/theo mùa khỏi bộ dọn RAM; bổ sung bộ đệm vòng **16 dòng SMAPI cuối** an toàn tín hiệu trong Crash Log (`Embedded.m`); và chốt `ExternalInputBridge.PollFrame()` đúng **1 lần/tick** kèm tối ưu chế độ cảm ứng thuần.
 
 - **🛠️ Bản Vá Khẩn Cấp `v1.1.1` (`#GL-V53YS2`) — Sửa Dứt Điểm Lỗi Texture Nhà Nông Trại (`Buildings/houses`) & Kích Hoạt Đầy Đủ Cold-Boot Stamp Cache:**
   - Gỡ bỏ nhánh `GL.BlitFramebuffer` trong `Texture2D.CopyFromTexture` (vốn bị khung cắt `GL_SCISSOR_TEST` còn lưu lại từ màn hình `LoadGameMenu` cắt trắng pixel khi Content Patcher cập nhật `Buildings/houses`, làm nhà bị giữ nguyên ảnh gốc vanilla và lộ phần mái nhà tầng 2 dưới bậc thềm), khôi phục cơ chế `GetData/SetData` miễn nhiễm Scissor & ColorMask kết hợp `try/finally` bảo toàn FBO.
@@ -102,8 +109,8 @@ dotnet build ModGarden\SDVMobileControls\SDVMobileControls.csproj -c Release
 powershell -ExecutionPolicy Bypass -File scripts\patch_perf_v7.ps1
 
 # 3. Đóng gói 2 bản IPA sạch (iOS / iPadOS 26–27+ & iOS / iPadOS 14–18)
-python scripts\package_embedded.py base-sdvios.ipa build\SDVModGarden_ios26 zsign.exe dist\Garden-Launcher-1.1.1-iOS26-27.ipa "$WorkDir\v7-host.dll" "$WorkDir\v7-touch.dll" "$WorkDir\Lidgren.Network.dll" --launcher --min-ios=16.0
-python scripts\package_embedded.py base-sdvios.ipa build\SDVModGarden_ios14 zsign.exe dist\Garden-Launcher-1.1.1-iOS14-18.ipa "$WorkDir\v7-host.dll" "$WorkDir\v7-touch.dll" "$WorkDir\Lidgren.Network.dll" --launcher --no-scene --min-ios=14.0
+python scripts\package_embedded.py base-sdvios.ipa build\SDVModGarden_ios26 zsign.exe dist\Garden-Launcher-1.1.2-iOS26-27.ipa "$WorkDir\v7-host.dll" "$WorkDir\v7-touch.dll" "$WorkDir\Lidgren.Network.dll" --launcher --min-ios=16.0
+python scripts\package_embedded.py base-sdvios.ipa build\SDVModGarden_ios14 zsign.exe dist\Garden-Launcher-1.1.2-iOS14-18.ipa "$WorkDir\v7-host.dll" "$WorkDir\v7-touch.dll" "$WorkDir\Lidgren.Network.dll" --launcher --no-scene --min-ios=14.0
 ```
 
 </details>

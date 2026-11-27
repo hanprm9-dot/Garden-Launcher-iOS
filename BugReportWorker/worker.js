@@ -433,7 +433,7 @@ export default {
     const fullDescription = clampStr(form.get("description"), 8000, "");
     const embedDescription = clampStr(fullDescription, 2000, "");
     const contact = clampStr(form.get("contact"), 140, "Không cung cấp");
-    const appVersion = clampStr(form.get("appVersion"), 40, "1.1.1");
+    const appVersion = clampStr(form.get("appVersion"), 40, "1.1.2");
     const iosVersion = clampStr(form.get("iosVersion"), 40, "?");
     const device = clampStr(form.get("device"), 64, "iPhone");
     const ramInfo = clampStr(form.get("ramInfo"), 120, "?");

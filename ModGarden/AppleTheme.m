@@ -302,8 +302,17 @@ static UIVisualEffectView *mkGlassCard(UIBlurEffectStyle style, CGFloat radius) 
     return blur;
 }
 
+static NSString *const kSDVAuroraPrefChangedNotification = @"SDVAuroraPrefChangedNotification";
+static BOOL gSdvAuroraEnabled = YES;
+
+static inline void sdvSetAuroraBackdropEnabled(BOOL enabled) {
+    if (gSdvAuroraEnabled == enabled) return;
+    gSdvAuroraEnabled = enabled;
+    [NSNotificationCenter.defaultCenter postNotificationName:kSDVAuroraPrefChangedNotification object:nil];
+}
+
 static inline BOOL sdvShouldPauseAmbientEffects(void) {
-    return UIAccessibilityIsReduceMotionEnabled() || NSProcessInfo.processInfo.lowPowerModeEnabled;
+    return !gSdvAuroraEnabled || UIAccessibilityIsReduceMotionEnabled() || NSProcessInfo.processInfo.lowPowerModeEnabled;
 }
 
 // ============================================================================
@@ -366,6 +375,7 @@ static inline BOOL sdvShouldPauseAmbientEffects(void) {
         [self applyPaletteForCurrentTrait];
         [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(onMotionOrPowerChanged:) name:NSProcessInfoPowerStateDidChangeNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(onMotionOrPowerChanged:) name:UIAccessibilityReduceMotionStatusDidChangeNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(onMotionOrPowerChanged:) name:kSDVAuroraPrefChangedNotification object:nil];
     }
     return self;
 }

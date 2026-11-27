@@ -59,6 +59,14 @@ namespace SDVMobileControls
         private static long _bootLastAssetReportMs;
         private static bool _bootNativeResolved;
         private static BootReportDelegate _bootNativeReport;
+        private static bool _gardenNativeResolved;
+        private static GardenRegisterDisplayLinkDelegate _fnRegDisplayLink;
+        private static GardenSetIntDelegate _fnSetMpActive;
+        private static GardenGetIntDelegate _fnIsGardenOpen;
+        private static IntPtr _registeredDisplayLinkPtr;
+        private static int _lastSentMpFlag = -1;
+        private static FieldInfo _hostDisplayLinkField;
+        private static bool _hostDisplayLinkFieldResolved;
         internal static bool SynthesizingTapAction;
         private static readonly List<HUDMessage> _stashedHudMessages = new List<HUDMessage>(8);
         private static bool _hudMessagesStashed;
@@ -99,6 +107,102 @@ namespace SDVMobileControls
             [MarshalAs(UnmanagedType.LPUTF8Str)] string stage,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string detail,
             int stepIdx);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void GardenRegisterDisplayLinkDelegate(IntPtr dlPtr);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void GardenSetIntDelegate(int val);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GardenGetIntDelegate();
+
+        private static void EnsureGardenNativeBridgeResolved()
+        {
+            if (_gardenNativeResolved) return;
+            _gardenNativeResolved = true;
+            try
+            {
+                IntPtr rtldDefault = new IntPtr(-2);
+                IntPtr pReg = BootDarwinDlsym(rtldDefault, "sdv_register_game_display_link");
+                if (pReg != IntPtr.Zero)
+                    _fnRegDisplayLink = Marshal.GetDelegateForFunctionPointer<GardenRegisterDisplayLinkDelegate>(pReg);
+                IntPtr pMp = BootDarwinDlsym(rtldDefault, "sdv_set_multiplayer_active");
+                if (pMp != IntPtr.Zero)
+                    _fnSetMpActive = Marshal.GetDelegateForFunctionPointer<GardenSetIntDelegate>(pMp);
+                IntPtr pOpen = BootDarwinDlsym(rtldDefault, "sdv_is_garden_open");
+                if (pOpen != IntPtr.Zero)
+                    _fnIsGardenOpen = Marshal.GetDelegateForFunctionPointer<GardenGetIntDelegate>(pOpen);
+            }
+            catch { }
+        }
+
+        internal static void TryRegisterGameDisplayLinkWithNative()
+        {
+            EnsureGardenNativeBridgeResolved();
+            if (_fnRegDisplayLink == null) return;
+            try
+            {
+                if (!_hostDisplayLinkFieldResolved)
+                {
+                    _hostDisplayLinkFieldResolved = true;
+                    foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        if (string.Equals(a.GetName().Name, "SDViOS", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Type gh = a.GetType("SDViOS.Loader.GameHost", throwOnError: false);
+                            _hostDisplayLinkField = gh?.GetField("_engineDisplayLink", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+                            break;
+                        }
+                    }
+                }
+                if (_hostDisplayLinkField == null) return;
+                object dlObj = _hostDisplayLinkField.GetValue(null);
+                if (dlObj == null) return;
+
+                PropertyInfo pHandle = dlObj.GetType().GetProperty("Handle", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                object hVal = pHandle?.GetValue(dlObj);
+                IntPtr ptr = IntPtr.Zero;
+                if (hVal is IntPtr ip)
+                {
+                    ptr = ip;
+                }
+                else if (hVal != null)
+                {
+                    FieldInfo fh = hVal.GetType().GetField("handle", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (fh?.GetValue(hVal) is IntPtr ip2)
+                        ptr = ip2;
+                }
+                if (ptr != IntPtr.Zero && ptr != _registeredDisplayLinkPtr)
+                {
+                    _registeredDisplayLinkPtr = ptr;
+                    _fnRegDisplayLink(ptr);
+                    _monitor?.Log("[GardenLauncher] Registered GameHost CADisplayLink with Mod Garden native host (60/120 FPS Mod Garden unlock).", LogLevel.Debug);
+                }
+            }
+            catch { }
+        }
+
+        internal static bool IsNativeGardenOpen()
+        {
+            if (!_gardenNativeResolved) EnsureGardenNativeBridgeResolved();
+            if (_fnIsGardenOpen == null) return false;
+            try { return _fnIsGardenOpen() != 0; } catch { return false; }
+        }
+
+        internal static void SyncNativeMultiplayerFlag(bool isMp)
+        {
+            int v = isMp ? 1 : 0;
+            if (v == _lastSentMpFlag) return;
+            if (!_gardenNativeResolved) EnsureGardenNativeBridgeResolved();
+            if (_fnSetMpActive == null) return;
+            try
+            {
+                _fnSetMpActive(v);
+                _lastSentMpFlag = v;
+            }
+            catch { }
+        }
 
         [DllImport("/usr/lib/libSystem.dylib", EntryPoint = "dlsym")]
         private static extern IntPtr BootDarwinDlsym(IntPtr handle, [MarshalAs(UnmanagedType.LPStr)] string symbol);
@@ -228,6 +332,7 @@ namespace SDVMobileControls
             helper.Events.GameLoop.Saved += OnSaved;
             helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
             helper.Events.GameLoop.DayStarted += OnDayStarted;
+            helper.Events.GameLoop.ReturnedToTitle += OnReturnedToTitle;
             helper.Events.Player.Warped += OnWarped;
         }
 
@@ -317,6 +422,7 @@ namespace SDVMobileControls
             EnsureGardenModHooksInstalled("GameLaunched");
             InstallMobileHarmonyPatches("GameLaunched");
             InstallExternalInputHarmonyPatches("GameLaunched");
+            TryRegisterGameDisplayLinkWithNative();
             try { RamOptimizer?.OnGameLaunched(); } catch { }
         }
 
@@ -350,6 +456,26 @@ namespace SDVMobileControls
             try { RamOptimizer?.OnDayStarted(); } catch { }
             SchedulePortraitSync(reloadAll: true, delayTicks: 35, reason: "DayStarted");
             ResetMailboxWatchdogSnapshot();
+        }
+
+        private void OnReturnedToTitle(object sender, ReturnedToTitleEventArgs e)
+        {
+            try { Engine?.OnReturnedToTitle(); } catch { }
+            try { ExternalInput?.OnReturnedToTitle(); } catch { }
+            try { RamOptimizer?.OnReturnedToTitle(); } catch { }
+            _portraitSyncDelayTicks = -1;
+            _pendingReloadAllPortraits = false;
+            _pendingPortraitKeys.Clear();
+            _portraitSyncReason = null;
+            _lastMailboxSnapshot.Clear();
+            _lastMailboxDayKey = -1;
+            _stuckReelingTicks = 0;
+            _mineFloorPendingHudDraw = false;
+            RestoreMineFloorRelocateIfNeeded();
+            RestoreStashedHudMessagesIfNeeded();
+            if (_registeredDisplayLinkPtr == IntPtr.Zero)
+                TryRegisterGameDisplayLinkWithNative();
+            _monitor?.Log("[GardenLauncher] Returned to Title — runtime states reset cleanly.", LogLevel.Debug);
         }
 
         private void LogMailDiagnostic(string phase)
@@ -561,6 +687,7 @@ namespace SDVMobileControls
             if (e != null && e.IsLocalPlayer)
             {
                 try { RamOptimizer?.OnWarped(e.NewLocation); } catch { }
+                try { RamOptimizer?.RefreshLocationPortraits(e.NewLocation); } catch { }
                 if (!_shaderDiagRanOutdoor && e.NewLocation != null && e.NewLocation.IsOutdoors)
                 {
                     _shaderDiagRanOutdoor = true;
@@ -660,6 +787,8 @@ namespace SDVMobileControls
             catch
             {
                 RestoreStashedHudMessagesIfNeeded();
+            if (_registeredDisplayLinkPtr == IntPtr.Zero)
+                TryRegisterGameDisplayLinkWithNative();
             }
         }
 
@@ -742,6 +871,8 @@ namespace SDVMobileControls
                 return;
 
             RestoreStashedHudMessagesIfNeeded();
+            if (_registeredDisplayLinkPtr == IntPtr.Zero)
+                TryRegisterGameDisplayLinkWithNative();
 
             try
             {
@@ -796,6 +927,8 @@ namespace SDVMobileControls
             RestoreMineFloorRelocateIfNeeded();
             _mineFloorPendingHudDraw = false;
             RestoreStashedHudMessagesIfNeeded();
+            if (_registeredDisplayLinkPtr == IntPtr.Zero)
+                TryRegisterGameDisplayLinkWithNative();
             try
             {
                 if (ExternalInput != null)
@@ -803,7 +936,6 @@ namespace SDVMobileControls
                     if (Engine != null)
                         ExternalInput.SyncPureGamepadConfig(Engine.IsPureGamepadMode);
                     ExternalInput.SetManagedSuppressed(Engine != null && Engine.IsUiOverlayBlockingExternalInput(null));
-                    ExternalInput.PollFrame();
                     ExternalInput.UpdateControllerRumble();
                 }
             }
@@ -1156,7 +1288,7 @@ namespace SDVMobileControls
         private static GamePadState OnExternalGamePadGetStateHook(int index)
         {
             var ext = ExternalInput;
-            return (index == 0 && ext != null) ? ext.PollAndGetStateForMonoGameHook(0) : default;
+            return (index == 0 && ext != null) ? ext.GetStateForMonoGameHook(0) : default;
         }
 
         private static bool OnHasActiveExtraKeys()

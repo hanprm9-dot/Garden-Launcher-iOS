@@ -3035,9 +3035,24 @@ static void sdvSpawnDiscordSparkleBurst(UIView *hostView, CGPoint origin, CGFloa
         [fpsSeg addTarget:self action:@selector(batterySaverFpsChanged:) forControlEvents:UIControlEventValueChanged];
         [fpsRow addArrangedSubview:fpsSeg];
 
+        UIStackView *menuFpsRow = mkVStack(6);
+        UIStackView *menuFpsTop = mkHStack(10);
+        [menuFpsTop addArrangedSubview:mkSettingsIconBadge(@"speedometer", kTintBlue, 28)];
+        UIStackView *menuFpsTxt = mkVStack(1);
+        [menuFpsTxt addArrangedSubview:mkLabel(@"FPS trong Menu game (Balo, Rương, Shop)", 13.5, UIFontWeightRegular, kInkPrimary)];
+        [menuFpsTxt addArrangedSubview:mkLabel(@"60 FPS giúp kéo đồ Balo & cuộn Shop mượt · 30 FPS mát máy, tiết kiệm pin hơn", 11.5, UIFontWeightRegular, kInkSecondary)];
+        [menuFpsTop addArrangedSubview:menuFpsTxt];
+        [menuFpsRow addArrangedSubview:menuFpsTop];
+        UISegmentedControl *menuFpsSeg = [[UISegmentedControl alloc] initWithItems:@[@"60 FPS (Mượt)", @"30 FPS (Tiết kiệm)"]];
+        menuFpsSeg.selectedSegmentIndex = _mobileCfg.menuFps30 ? 1 : 0;
+        [menuFpsSeg addTarget:self action:@selector(menuFpsChanged:) forControlEvents:UIControlEventValueChanged];
+        [menuFpsRow addArrangedSubview:menuFpsSeg];
+
         [_pane addArrangedSubview:mkGroupedRows(@[
             [self mkSettingsSwitchRow:@"Giảm hạt thời tiết thừa (giữ mượt FPS lúc mưa/bão)" icon:@"cloud.rain.fill" color:kTintTeal on:_mobileCfg.reduceWeather tag:39],
-            fpsRow
+            fpsRow,
+            menuFpsRow,
+            [self mkSettingsSwitchRow:@"Hiệu ứng nền động Cực Quang (Aurora) trong Mod Garden" icon:@"sparkles" color:kTintPurple on:_mobileCfg.auroraBackdrop tag:55]
         ], 48)];
 
         // Card 3: Lưu tự động, Tạm dừng & Âm thanh
@@ -3294,6 +3309,13 @@ static void sdvSpawnDiscordSparkleBurst(UIView *hostView, CGPoint origin, CGFloa
     NSInteger idx = seg.selectedSegmentIndex;
     // Seg 0 = 60 FPS (0), Seg 1 = 45 FPS (2), Seg 2 = 30 FPS (1) — preserves backwards compatibility with saver30fps=1!
     _mobileCfg.batterySaverFpsMode = (idx == 1) ? 2 : ((idx == 2) ? 1 : 0);
+    [_mobileCfg saveToDocuments:_root.path];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+}
+
+-(void)menuFpsChanged:(UISegmentedControl *)seg {
+    _mobileCfg = [SDVMobileCtrlConfig loadFromDocuments:_root.path];
+    _mobileCfg.menuFps30 = (seg.selectedSegmentIndex == 1);
     [_mobileCfg saveToDocuments:_root.path];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
@@ -3560,7 +3582,7 @@ static BOOL sdvResolveXnaKeyString(NSString *rawKey, NSString **outLabel, NSInte
         [self renderAll:NO];
         return;
     }
-    if (sw.tag >= 30 && sw.tag <= 54) {
+    if (sw.tag >= 30 && sw.tag <= 55) {
         _mobileCfg = [SDVMobileCtrlConfig loadFromDocuments:_root.path];
         switch (sw.tag) {
             case 30: _mobileCfg.autoTool = sw.isOn; break;
@@ -3588,6 +3610,7 @@ static BOOL sdvResolveXnaKeyString(NSString *rawKey, NSString **outLabel, NSInte
             case 52: _mobileCfg.respectMuteSwitch = sw.isOn; break;
             case 53: _mobileCfg.showToolHitLocation = sw.isOn; break;
             case 54: _mobileCfg.pureGamepadMode = sw.isOn; break;
+            case 55: _mobileCfg.auroraBackdrop = sw.isOn; break;
         }
         [_mobileCfg saveToDocuments:_root.path];
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];

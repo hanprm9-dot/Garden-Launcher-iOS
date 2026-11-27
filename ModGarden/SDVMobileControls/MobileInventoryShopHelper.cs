@@ -115,6 +115,21 @@ namespace SDVMobileControls
         private int _selectedBagSlot = -1;
         private InventoryMenu _selectedBagInv;
 
+        // Cached drag hover target (recomputed only when finger moves >= 2px, avoiding 60Hz full-slot scans!)
+        private Vector2 _dragHoverCachedVp;
+        private bool _dragHoverCacheValid;
+        private bool _dragHoverIsTrash;
+        private Rectangle _dragHoverTrashUi;
+        private Rectangle _dragHoverSlotUi;
+        private Rectangle _dragHoverAreaUi;
+
+        // Cached fixed item tooltip banner text (eliminates 60Hz getDescription/Replace/interpolation GC churn!)
+        private Item _tipCachedItem;
+        private int _tipCachedStack = -1;
+        private string _tipCachedTitle;
+        private string _tipCachedStats;
+        private string _tipCachedDesc;
+
         public bool IsPopupOpen => _popupKind != PopupKind.None;
         public bool IsDraggingItem => _isDragging && _dragItem != null;
         public bool HasSelectedSlot => _selectedBagSlot >= 0;
@@ -124,6 +139,7 @@ namespace SDVMobileControls
             ClosePopup();
             ResetTouch();
             ClearSelection();
+            _dragHoverCacheValid = false;
             _shopScrollVel = 0f;
             TapMode = ChestTapMode.FullStack;
         }
@@ -132,6 +148,8 @@ namespace SDVMobileControls
         {
             _selectedBagSlot = -1;
             _selectedBagInv = null;
+            _tipCachedItem = null;
+            _tipCachedStack = -1;
         }
 
         private void ClosePopup()
@@ -1243,8 +1261,11 @@ namespace SDVMobileControls
             {
                 _touchCurVp = vp;
                 float dist = Vector2.Distance(vp, _touchStartVp);
-                // Retina-safe drag threshold (~15-18pt on iPhone) so quick taps into chests NEVER misfire as drags!
-                float dragThresh = Math.Max(28f, vpH * 0.032f);
+                // Snappy Backpack drag threshold (~7-9pt on iPhone) for instant item lift;
+                // Chest keeps a safer threshold (~12-15pt) so rapid 1-tap chest transfers never misfire as drags!
+                float dragThresh = isChestMenu
+                    ? Math.Max(24f, vpH * 0.025f)
+                    : Math.Max(14f, vpH * 0.014f);
 
                 if (!_isDragging)
                 {
@@ -2307,47 +2328,65 @@ namespace SDVMobileControls
                 }
             }
 
-            // 1. Draw Drag-and-Drop item smoothly under finger + hovered target slot highlight
+            // 1. Draw Drag-and-Drop item smoothly under finger + hovered target slot highlight (hover cached per >=2px move!)
             if (IsDraggingItem && activeMenu != null)
             {
-                Point uiHover = vpToUi(_touchCurVp);
-                ItemGrabMenu grab = activeMenu as ItemGrabMenu;
-                InventoryPage invPage = (activeMenu as GameMenu)?.GetCurrentPage() as InventoryPage;
+                if (!_dragHoverCacheValid || Vector2.DistanceSquared(_touchCurVp, _dragHoverCachedVp) >= 4f)
+                {
+                    _dragHoverCachedVp = _touchCurVp;
+                    _dragHoverCacheValid = true;
+                    _dragHoverIsTrash = false;
+                    _dragHoverTrashUi = Rectangle.Empty;
+                    _dragHoverSlotUi = Rectangle.Empty;
+                    _dragHoverAreaUi = Rectangle.Empty;
 
-                ClickableTextureComponent trash = grab?.trashCan ?? invPage?.trashCan;
-                if (trash != null && trash.containsPoint(uiHover.X, uiHover.Y))
-                {
-                    Rectangle trVp = UiRectToVp(trash.bounds, uiToVp);
-                    sb.Draw(pixel, trVp, new Color(220, 50, 40) * 0.32f);
-                    DrawBorder(sb, pixel, trVp, Math.Max(3, vpH / 260), new Color(255, 80, 65));
-                }
-                else
-                {
-                    Rectangle hoverUi = FindHoveredSlotRect(grab?.ItemsToGrabMenu, grab?.inventory ?? invPage?.inventory, uiHover);
-                    if (!hoverUi.IsEmpty)
+                    Point uiHover = vpToUi(_touchCurVp);
+                    ItemGrabMenu grab = activeMenu as ItemGrabMenu;
+                    InventoryPage invPage = (activeMenu as GameMenu)?.GetCurrentPage() as InventoryPage;
+
+                    ClickableTextureComponent trash = grab?.trashCan ?? invPage?.trashCan;
+                    if (trash != null && trash.containsPoint(uiHover.X, uiHover.Y))
                     {
-                        Rectangle hvVp = UiRectToVp(hoverUi, uiToVp);
-                        sb.Draw(pixel, hvVp, new Color(90, 215, 90) * 0.24f);
-                        DrawBorder(sb, pixel, hvVp, Math.Max(3, vpH / 260), new Color(90, 225, 90));
+                        _dragHoverIsTrash = true;
+                        _dragHoverTrashUi = trash.bounds;
                     }
-                    else if (grab != null)
+                    else
                     {
-                        InventoryMenu targetDropInv = null;
-                        if (_dragSrcInv == grab.inventory && (grab.reverseGrab || grab.shippingBin) && grab.ItemsToGrabMenu != null && IsPointInInventoryPanel(grab.ItemsToGrabMenu, uiHover, 26))
-                            targetDropInv = grab.ItemsToGrabMenu;
-                        else if (_dragSrcInv == grab.ItemsToGrabMenu && grab.inventory != null && IsPointInInventoryPanel(grab.inventory, uiHover, 26))
-                            targetDropInv = grab.inventory;
-
-                        if (targetDropInv != null && TryGetInventoryPanelRect(targetDropInv, out Rectangle areaUi))
+                        _dragHoverSlotUi = FindHoveredSlotRect(grab?.ItemsToGrabMenu, grab?.inventory ?? invPage?.inventory, uiHover);
+                        if (_dragHoverSlotUi.IsEmpty && grab != null)
                         {
-                            Rectangle areaVp = UiRectToVp(areaUi, uiToVp);
-                            sb.Draw(pixel, areaVp, new Color(90, 215, 90) * 0.12f);
-                            DrawBorder(sb, pixel, areaVp, Math.Max(3, vpH / 240), new Color(110, 235, 110));
+                            InventoryMenu targetDropInv = null;
+                            if (_dragSrcInv == grab.inventory && (grab.reverseGrab || grab.shippingBin) && grab.ItemsToGrabMenu != null && IsPointInInventoryPanel(grab.ItemsToGrabMenu, uiHover, 26))
+                                targetDropInv = grab.ItemsToGrabMenu;
+                            else if (_dragSrcInv == grab.ItemsToGrabMenu && grab.inventory != null && IsPointInInventoryPanel(grab.inventory, uiHover, 26))
+                                targetDropInv = grab.inventory;
+
+                            if (targetDropInv != null && TryGetInventoryPanelRect(targetDropInv, out Rectangle areaUi))
+                                _dragHoverAreaUi = areaUi;
                         }
                     }
                 }
 
-                // Draw Stardew pixel slot box + item icon right under finger (dead-center via 2D scale matrix so Z never clips!)
+                if (_dragHoverIsTrash && !_dragHoverTrashUi.IsEmpty)
+                {
+                    Rectangle trVp = UiRectToVp(_dragHoverTrashUi, uiToVp);
+                    sb.Draw(pixel, trVp, new Color(220, 50, 40) * 0.32f);
+                    DrawBorder(sb, pixel, trVp, Math.Max(3, vpH / 260), new Color(255, 80, 65));
+                }
+                else if (!_dragHoverSlotUi.IsEmpty)
+                {
+                    Rectangle hvVp = UiRectToVp(_dragHoverSlotUi, uiToVp);
+                    sb.Draw(pixel, hvVp, new Color(90, 215, 90) * 0.24f);
+                    DrawBorder(sb, pixel, hvVp, Math.Max(3, vpH / 260), new Color(90, 225, 90));
+                }
+                else if (!_dragHoverAreaUi.IsEmpty)
+                {
+                    Rectangle areaVp = UiRectToVp(_dragHoverAreaUi, uiToVp);
+                    sb.Draw(pixel, areaVp, new Color(90, 215, 90) * 0.12f);
+                    DrawBorder(sb, pixel, areaVp, Math.Max(3, vpH / 240), new Color(110, 235, 110));
+                }
+
+                // Draw Stardew pixel slot box + item icon right under finger (zero SpriteBatch End/Begin GPU flush!)
                 float iconScale = Math.Clamp(Math.Min(vpW, vpH) / 720f, 1.0f, 2.2f);
                 int slotSize = (int)(68f * iconScale);
                 var floatBox = new Rectangle((int)(_touchCurVp.X - slotSize * 0.5f), (int)(_touchCurVp.Y - slotSize * 0.5f), slotSize, slotSize);
@@ -2357,6 +2396,10 @@ namespace SDVMobileControls
                 }
                 catch { }
                 DrawItemCenteredInSlot(sb, _dragItem, floatBox, StackDrawType.Draw, 1f);
+            }
+            else
+            {
+                _dragHoverCacheValid = false;
             }
 
             // 2. Draw authentic Stardew Valley native themed Buy / Sell / Craft / Split Popup!
@@ -2372,34 +2415,11 @@ namespace SDVMobileControls
             if (sb == null || salable == null || slotBox.Width <= 0 || slotBox.Height <= 0)
                 return;
 
-            var gd = sb.GraphicsDevice;
-            if (gd != null)
-            {
-                float s = Math.Max(0.25f, slotBox.Width / 64f);
-                Matrix m = Matrix.CreateScale(s, s, 1f) * Matrix.CreateTranslation(slotBox.X, slotBox.Y, 0f);
-                bool ended = false;
-                try
-                {
-                    sb.End();
-                    ended = true;
-                    sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, null, null, m);
-                    salable.drawInMenu(sb, Vector2.Zero, 0.88f, alpha, 0.90f, stackDraw, Color.White, drawShadow: true);
-                    sb.End();
-                    sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, null);
-                    return;
-                }
-                catch
-                {
-                    if (ended)
-                    {
-                        try { sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, null); } catch { }
-                    }
-                }
-            }
-
-            Vector2 fallbackPos = new Vector2(slotBox.Center.X - 32f, slotBox.Center.Y - 32f);
-            float fbScale = Math.Max(0.25f, (slotBox.Width * 0.86f) / 64f);
-            try { salable.drawInMenu(sb, fallbackPos, fbScale, alpha, 0.90f, stackDraw, Color.White, drawShadow: true); } catch { }
+            // Zero-flush direct SpriteBatch draw: Item.drawInMenu centers its sprite at location + (32, 32)!
+            // Eliminates 3x SpriteBatch.End()/Begin() GPU flushes per frame during Backpack/Chest drag-and-drop!
+            Vector2 iconPos = new Vector2(slotBox.Center.X - 32f, slotBox.Center.Y - 32f);
+            float scale = Math.Clamp((slotBox.Width * 0.86f) / 64f, 0.45f, 2.2f);
+            try { salable.drawInMenu(sb, iconPos, scale, alpha, 0.90f, stackDraw, Color.White, drawShadow: true); } catch { }
         }
 
         private void DrawStardewPixelPopup(SpriteBatch sb, Texture2D pixel, int vpW, int vpH)
@@ -2826,35 +2846,45 @@ namespace SDVMobileControls
             catch { }
         }
 
-        private static void DrawFixedItemTooltipBanner(SpriteBatch sb, Texture2D pixel, Item item, int vpW, int vpH)
+        private void DrawFixedItemTooltipBanner(SpriteBatch sb, Texture2D pixel, Item item, int vpW, int vpH)
         {
             if (item == null || Game1.smallFont == null) return;
             try
             {
                 int px = PixelUi.Step(vpH);
                 float fScale = Math.Clamp(vpH / 980f, 0.70f, 1.25f);
-                string title = item.DisplayName ?? item.Name ?? "";
-                string stats = "";
-                if (item is StardewValley.Object obj)
+                if (!ReferenceEquals(_tipCachedItem, item) || _tipCachedStack != item.Stack)
                 {
-                    if (obj.Edibility > 0)
+                    _tipCachedItem = item;
+                    _tipCachedStack = item.Stack;
+                    _tipCachedTitle = item.DisplayName ?? item.Name ?? "";
+                    string stats = "";
+                    if (item is StardewValley.Object obj)
                     {
-                        int energy = obj.staminaRecoveredOnConsumption();
-                        int health = obj.healthRecoveredOnConsumption();
-                        stats = $"+{energy} NL  +{health} Mau";
+                        if (obj.Edibility > 0)
+                        {
+                            int energy = obj.staminaRecoveredOnConsumption();
+                            int health = obj.healthRecoveredOnConsumption();
+                            stats = $"+{energy} NL  +{health} Mau";
+                        }
+                        int sell = 0;
+                        try { sell = obj.sellToStorePrice(); } catch { }
+                        if (sell > 0)
+                            stats = string.IsNullOrEmpty(stats) ? $"{sell:N0}g" : $"{stats}  ·  {sell:N0}g";
                     }
-                    int sell = 0;
-                    try { sell = obj.sellToStorePrice(); } catch { }
-                    if (sell > 0)
-                        stats = string.IsNullOrEmpty(stats) ? $"{sell:N0}g" : $"{stats}  ·  {sell:N0}g";
+                    _tipCachedStats = stats;
+                    string desc = "";
+                    try { desc = (item.getDescription() ?? "").Replace("\r", " ").Replace("\n", " ").Trim(); } catch { }
+                    if (desc.Length > 68) desc = desc.Substring(0, 65) + "...";
+                    _tipCachedDesc = desc;
                 }
-                string desc = "";
-                try { desc = (item.getDescription() ?? "").Replace("\r", " ").Replace("\n", " ").Trim(); } catch { }
-                if (desc.Length > 68) desc = desc.Substring(0, 65) + "...";
+                string title = _tipCachedTitle ?? "";
+                string statsOut = _tipCachedStats ?? "";
+                string descOut = _tipCachedDesc ?? "";
 
                 int bw = Math.Clamp((int)(vpW * 0.44f), 280, Math.Min(600, vpW - 40));
                 int lineH = Math.Max(18, (int)(26f * fScale));
-                int lines = 1 + (string.IsNullOrEmpty(stats) ? 0 : 1) + (string.IsNullOrEmpty(desc) ? 0 : 1);
+                int lines = 1 + (string.IsNullOrEmpty(statsOut) ? 0 : 1) + (string.IsNullOrEmpty(descOut) ? 0 : 1);
                 int bh = lines * lineH + px * 8;
                 // Center along the bottom edge so it NEVER covers the top-right Close 'X' button, Context Bar, or DROP/Trash Can!
                 int bx = (vpW - bw) / 2;
@@ -2866,14 +2896,14 @@ namespace SDVMobileControls
                 float ty = box.Y + px * 3;
                 DrawStardewText(sb, title, new Vector2(tx, ty), Game1.textColor, fScale * 0.96f);
                 ty += lineH;
-                if (!string.IsNullOrEmpty(stats))
+                if (!string.IsNullOrEmpty(statsOut))
                 {
-                    DrawStardewText(sb, stats, new Vector2(tx, ty), new Color(36, 118, 42), fScale * 0.84f);
+                    DrawStardewText(sb, statsOut, new Vector2(tx, ty), new Color(36, 118, 42), fScale * 0.84f);
                     ty += lineH;
                 }
-                if (!string.IsNullOrEmpty(desc))
+                if (!string.IsNullOrEmpty(descOut))
                 {
-                    DrawStardewText(sb, desc, new Vector2(tx, ty), Game1.textColor * 0.88f, fScale * 0.78f);
+                    DrawStardewText(sb, descOut, new Vector2(tx, ty), Game1.textColor * 0.88f, fScale * 0.78f);
                 }
             }
             catch { }

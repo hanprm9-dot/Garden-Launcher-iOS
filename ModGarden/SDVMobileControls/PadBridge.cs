@@ -62,6 +62,7 @@ namespace SDVMobileControls
         private readonly PropertyInfo _settingsInstanceProp;
         private readonly PropertyInfo _settingsTargetZoomProp;
         private readonly PropertyInfo _settingsMouseModeProp;
+        private readonly PropertyInfo _settingsMenuThrottleProp;
         private readonly FieldInfo _rawScreenWidthField;
         private readonly FieldInfo _rawScreenHeightField;
         private readonly FieldInfo _activeKeysListField;
@@ -106,6 +107,16 @@ namespace SDVMobileControls
         private Action<bool> _fnSetQuick;
         private FieldInfo _cachedSInputKbField;
         private bool _sInputKbResolved;
+
+        // Cached QuickSaveManager singleton delegates & screen-bounds sync cache (0% reflection/boxing at 60Hz!)
+        private object _boundQsm;
+        private Func<bool> _fnQsmIsReloading;
+        private Func<bool> _fnQsmIsMiddaySaving;
+        private object _lastSyncedBoundsPad;
+        private int _lastSyncedRawW = -1;
+        private int _lastSyncedRawH = -1;
+        private bool _mouseModeChecked;
+        private int _lastMenuThrottleApplied = -1;
 
         // Pre-allocated tiny argument arrays for fallback only
         private readonly object[] _arg1 = new object[1];
@@ -173,6 +184,7 @@ namespace SDVMobileControls
             _settingsInstanceProp = setType?.GetProperty("Instance", stat);
             _settingsTargetZoomProp = setType?.GetProperty("TargetZoomLevel", any);
             _settingsMouseModeProp = setType?.GetProperty("MouseControlMode", any);
+            _settingsMenuThrottleProp = setType?.GetProperty("EnableMenuFrameThrottling", any);
             _rawScreenWidthField = padType.GetField("_rawScreenWidth", any);
             _rawScreenHeightField = padType.GetField("_rawScreenHeight", any);
             _activeKeysListField = padType.GetField("_activeKeysList", any);
@@ -258,13 +270,32 @@ namespace SDVMobileControls
                    (_fnGetDrawerOpen != null ? _fnGetDrawerOpen() : GetBool(_getIsHotkeyDrawerOpen, pad));
         }
 
+        private void EnsureQsmDelegates()
+        {
+            if (_qsmInstanceProp == null) return;
+            object inst = _boundQsm;
+            if (inst == null)
+            {
+                try { inst = _qsmInstanceProp.GetValue(null); } catch { inst = null; }
+                if (inst == null) return;
+                _boundQsm = inst;
+                _fnQsmIsReloading = BindInstanceDel<Func<bool>>(inst, _qsmIsReloadingProp?.GetGetMethod(true));
+                _fnQsmIsMiddaySaving = BindInstanceDel<Func<bool>>(inst, _qsmIsMiddaySavingProp?.GetGetMethod(true));
+            }
+        }
+
         public void CloseHotkeyDrawer(object pad)
         {
-            if (pad == null || _getIsHotkeyDrawerOpen == null || _setIsHotkeyDrawerOpen == null) return;
+            if (pad == null) return;
+            EnsurePadDelegates(pad);
             try
             {
-                if (GetBool(_getIsHotkeyDrawerOpen, pad))
-                    _setIsHotkeyDrawerOpen.Invoke(pad, _argBoolFalse);
+                bool open = _fnGetDrawerOpen != null
+                    ? _fnGetDrawerOpen()
+                    : (_getIsHotkeyDrawerOpen != null && GetBool(_getIsHotkeyDrawerOpen, pad));
+                if (!open) return;
+                if (_fnSetDrawerOpen != null) _fnSetDrawerOpen(false);
+                else _setIsHotkeyDrawerOpen?.Invoke(pad, _argBoolFalse);
             }
             catch { }
         }
@@ -273,7 +304,10 @@ namespace SDVMobileControls
         {
             try
             {
-                object inst = _qsmInstanceProp?.GetValue(null);
+                if (_fnQsmIsReloading != null) return _fnQsmIsReloading();
+                EnsureQsmDelegates();
+                if (_fnQsmIsReloading != null) return _fnQsmIsReloading();
+                object inst = _boundQsm ?? _qsmInstanceProp?.GetValue(null);
                 if (inst == null || _qsmIsReloadingProp == null) return false;
                 return (bool)_qsmIsReloadingProp.GetValue(inst);
             }
@@ -284,7 +318,10 @@ namespace SDVMobileControls
         {
             try
             {
-                object inst = _qsmInstanceProp?.GetValue(null);
+                if (_fnQsmIsMiddaySaving != null) return _fnQsmIsMiddaySaving();
+                EnsureQsmDelegates();
+                if (_fnQsmIsMiddaySaving != null) return _fnQsmIsMiddaySaving();
+                object inst = _boundQsm ?? _qsmInstanceProp?.GetValue(null);
                 if (inst == null || _qsmIsMiddaySavingProp == null) return false;
                 return (bool)_qsmIsMiddaySavingProp.GetValue(inst);
             }
@@ -421,17 +458,38 @@ namespace SDVMobileControls
 
         public void SetPlayerRequestedMenuOpen(object pad, bool value)
         {
-            try { _setPlayerRequestedMenuOpen?.Invoke(pad, value ? _argBoolTrue : _argBoolFalse); } catch { }
+            if (pad == null) return;
+            EnsurePadDelegates(pad);
+            try
+            {
+                if (_fnSetPlayerReqMenu != null) _fnSetPlayerReqMenu(value);
+                else _setPlayerRequestedMenuOpen?.Invoke(pad, value ? _argBoolTrue : _argBoolFalse);
+            }
+            catch { }
         }
 
         public void SyncMenuBarConfig(object pad)
         {
-            try { _syncMenuBarConfig?.Invoke(pad, _argBoolFalse); } catch { }
+            if (pad == null) return;
+            EnsurePadDelegates(pad);
+            try
+            {
+                if (_fnSyncMenuBar != null) _fnSyncMenuBar(false);
+                else _syncMenuBarConfig?.Invoke(pad, _argBoolFalse);
+            }
+            catch { }
         }
 
         public void TriggerVirtualKeyboard(object pad)
         {
-            try { _triggerVirtualKeyboard?.Invoke(pad, null); } catch { }
+            if (pad == null) return;
+            EnsurePadDelegates(pad);
+            try
+            {
+                if (_fnTriggerKb != null) _fnTriggerKb();
+                else _triggerVirtualKeyboard?.Invoke(pad, null);
+            }
+            catch { }
         }
 
         public bool GetButtonX(object pad) { EnsurePadDelegates(pad); return _fnGetBtnX != null ? _fnGetBtnX() : GetBool(_getButtonX, pad); }
@@ -498,16 +556,44 @@ namespace SDVMobileControls
             catch { }
         }
 
+        public void SyncMenuFrameThrottling(bool enable30Fps)
+        {
+            int want = enable30Fps ? 1 : 0;
+            if (_lastMenuThrottleApplied == want || _settingsInstanceProp == null || _settingsMenuThrottleProp == null)
+                return;
+            try
+            {
+                object inst = _settingsInstanceProp.GetValue(null);
+                if (inst != null)
+                {
+                    _settingsMenuThrottleProp.SetValue(inst, enable30Fps ? (object)true : (object)false);
+                    _lastMenuThrottleApplied = want;
+                }
+            }
+            catch { }
+        }
+
         public void SyncScreenBoundsAndMouseOverride(object pad, int rawW, int rawH)
         {
             if (pad == null) return;
+            bool boundsChanged = !ReferenceEquals(_lastSyncedBoundsPad, pad) ||
+                                 (rawW > 0 && rawW != _lastSyncedRawW) ||
+                                 (rawH > 0 && rawH != _lastSyncedRawH);
+            if (!boundsChanged && _mouseModeChecked)
+                return;
             try
             {
-                if (rawW > 0 && _rawScreenWidthField != null)
-                    _rawScreenWidthField.SetValue(pad, rawW);
-                if (rawH > 0 && _rawScreenHeightField != null)
-                    _rawScreenHeightField.SetValue(pad, rawH);
-                if (_settingsInstanceProp != null && _settingsMouseModeProp != null && _mouseModePointAndClick != null)
+                if (boundsChanged)
+                {
+                    if (rawW > 0 && _rawScreenWidthField != null)
+                        _rawScreenWidthField.SetValue(pad, rawW);
+                    if (rawH > 0 && _rawScreenHeightField != null)
+                        _rawScreenHeightField.SetValue(pad, rawH);
+                    _lastSyncedBoundsPad = pad;
+                    if (rawW > 0) _lastSyncedRawW = rawW;
+                    if (rawH > 0) _lastSyncedRawH = rawH;
+                }
+                if (!_mouseModeChecked && _settingsInstanceProp != null && _settingsMouseModeProp != null && _mouseModePointAndClick != null)
                 {
                     object st = _settingsInstanceProp.GetValue(null);
                     if (st != null)
@@ -515,6 +601,7 @@ namespace SDVMobileControls
                         object cur = _settingsMouseModeProp.GetValue(st);
                         if (cur != null && Convert.ToInt32(cur) == 2) // 2 = MouseMode.Disabled breaks PrefixMouseGetState!
                             _settingsMouseModeProp.SetValue(st, _mouseModePointAndClick);
+                        _mouseModeChecked = true;
                     }
                 }
             }

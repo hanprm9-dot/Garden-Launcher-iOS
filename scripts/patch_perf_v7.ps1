@@ -1072,7 +1072,50 @@ for ($i = 0; $i -lt $ahpM.Body.Instructions.Count; $i++) {
 }
 Write-Host "  Pure Gamepad Mode (TouchControls): Injected TouchVirtualPad.IsPureGamepadMode() bypass in OnUpdateTicking + TouchDelegatingModHooks + ApplyHarmonyPatches!"
 
-Write-Host "  v7 TouchControls: Native 3x/2x + Direct MobileHooks + PrefixClientBounds + MenuLag(stackSkip, GC 140MB x$gmLowered) + Poll 45f + Watchdog $bumped"
+# 1.11 Exit-to-Title Deadlock & UI-Stall Fix (credit @Mudkip267):
+#      Neutralize blocking System.GC::WaitForPendingFinalizers() calls on the UI thread in TouchControls
+#      (MemoryWatchdog.ForceCollect + ModEntry.PurgeNonCoreAssets) so menu transitions & Exit-to-Title never freeze!
+$waitFinNopped = 0
+function Nop-WaitForPendingFinalizers($typeDef) {
+    foreach ($m in $typeDef.Methods) {
+        if (-not $m.HasBody) { continue }
+        foreach ($ins in $m.Body.Instructions) {
+            if (($ins.OpCode.Name -eq "call" -or $ins.OpCode.Name -eq "callvirt") -and
+                $ins.Operand -is [Mono.Cecil.MethodReference] -and
+                $ins.Operand.DeclaringType.FullName -eq "System.GC" -and
+                $ins.Operand.Name -eq "WaitForPendingFinalizers") {
+                $ins.OpCode = [Mono.Cecil.Cil.OpCodes]::Nop
+                $ins.Operand = $null
+                $script:waitFinNopped++
+            }
+        }
+    }
+    foreach ($nt in $typeDef.NestedTypes) { Nop-WaitForPendingFinalizers $nt }
+}
+foreach ($t in $tMod.Types) { Nop-WaitForPendingFinalizers $t }
+if ($waitFinNopped -lt 2) { throw "Expected >=2 GC.WaitForPendingFinalizers calls in TouchControls, got $waitFinNopped!" }
+Write-Host "  Exit-to-Title & GC-Stall Fix (TouchControls): Neutralized $waitFinNopped blocking GC.WaitForPendingFinalizers() call(s)!"
+
+# 1.12 In-Game Menu 60 FPS Default Fix (TouchControls):
+#      TouchOverlaySettings..ctor previously defaulted EnableMenuFrameThrottling = true (forcing Backpack/Chest/Shop menus to 30 FPS!).
+#      Change default to false (60 FPS smooth menus); users can still toggle 30 FPS Menu Battery Saver live from Mod Garden!
+$tTos = $tMod.GetType("SDViOSTouchControls.TouchOverlaySettings")
+$mTosCtor = if ($tTos) { $tTos.Methods | Where-Object { $_.Name -eq ".ctor" -and $_.HasBody } | Select-Object -First 1 } else { $null }
+$menuFpsPatched = $false
+if ($mTosCtor) {
+    $tosIns = $mTosCtor.Body.Instructions
+    for ($i = 1; $i -lt $tosIns.Count; $i++) {
+        if ($tosIns[$i].OpCode.Name -eq "stfld" -and "$($tosIns[$i].Operand)" -like "*<EnableMenuFrameThrottling>k__BackingField*" -and $tosIns[$i-1].OpCode.Name -eq "ldc.i4.1") {
+            $tosIns[$i-1].OpCode = [Mono.Cecil.Cil.OpCodes]::Ldc_I4_0
+            $menuFpsPatched = $true
+            break
+        }
+    }
+}
+if (-not $menuFpsPatched) { throw "Failed to patch EnableMenuFrameThrottling default in TouchOverlaySettings..ctor!" }
+Write-Host "  Menu 60 FPS Fix (TouchControls): EnableMenuFrameThrottling default changed true -> false (toggleable 60/30 FPS in Mod Garden)!"
+
+Write-Host "  v7 TouchControls: Native 3x/2x + Direct MobileHooks + PrefixClientBounds + MenuLag(stackSkip, GC 140MB x$gmLowered) + Poll 45f + Watchdog $bumped + WaitFinNop x$waitFinNopped + Menu60FPS"
 $tAsm.Write($outTouch)
 $tAsm.Dispose()
 Verify-Assembly $outTouch
@@ -1553,7 +1596,7 @@ if ($tRsp -and $hCreateDir -and $hPathComb3 -and $hWriteText -and $hGetMtime -an
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldarg_0))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Call, $hGetMtime))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Stloc, $vDt))
-    $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldstr, "v111|"))
+    $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldstr, "v112|"))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldarg_0))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldstr, "|"))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldloca, $vLen))
@@ -3097,6 +3140,63 @@ foreach ($ins in @(
     $gpIL.Create([Mono.Cecil.Cil.OpCodes]::Ret)
 )) { $gpIL.InsertBefore($gp0, $ins) }
 Write-Host "  iOS 0% JIT GamePad Fix (MonoGame): Injected GamePad.ExternalGetStateHook into PlatformGetState!"
+
+# 3.13 iOS CADisplayLink 60Hz VSync Frame-Pacing Snap in Microsoft.Xna.Framework.Game.Tick():
+#      Eliminates main-thread spin-wait / Thread.Sleep(1) and 2x-DoUpdate movement judder when iOS CADisplayLink fires
+#      up to 2.0ms early (e.g. 16.2-16.6ms < 16.6667ms TargetElapsedTime). Keeps exact 60.0Hz logic speed!
+$tMgGame = $mgMod.GetType("Microsoft.Xna.Framework.Game")
+$mMgTick = if ($tMgGame) { $tMgGame.Methods | Where-Object { $_.Name -eq "Tick" -and $_.Parameters.Count -eq 0 -and $_.HasBody } | Select-Object -First 1 } else { $null }
+$fAccum  = if ($tMgGame) { $tMgGame.Fields  | Where-Object { $_.Name -eq "_accumulatedElapsedTime" } | Select-Object -First 1 } else { $null }
+$mGetTet = if ($tMgGame) { $tMgGame.Methods | Where-Object { $_.Name -eq "get_TargetElapsedTime" } | Select-Object -First 1 } else { $null }
+$mTsTicks = Find-Ref $mgMod "System.Int64 System.TimeSpan::get_Ticks()"
+if (-not $mMgTick -or -not $fAccum -or -not $mGetTet -or -not $mTsTicks) {
+    throw "Missing Game.Tick / _accumulatedElapsedTime / get_TargetElapsedTime / TimeSpan.get_Ticks!"
+}
+Expand-ShortBranches $mMgTick
+$tkIns = $mMgTick.Body.Instructions
+$vsyncAnchor = $null
+for ($i = 0; $i -lt ($tkIns.Count - 4); $i++) {
+    if ($tkIns[$i].OpCode.Name -eq "ldarg.0" -and
+        $tkIns[$i+1].OpCode.Name -eq "ldfld" -and $tkIns[$i+1].Operand -eq $fAccum -and
+        $tkIns[$i+2].OpCode.Name -eq "ldarg.0" -and
+        $tkIns[$i+3].OpCode.Name -eq "call" -and $tkIns[$i+3].Operand -eq $mGetTet -and
+        $tkIns[$i+4].OpCode.Name -eq "call" -and "$($tkIns[$i+4].Operand)" -like "*TimeSpan::op_LessThan*") {
+        $vsyncAnchor = $tkIns[$i]
+        break
+    }
+}
+if (-not $vsyncAnchor) { throw "Could not locate _accumulatedElapsedTime < TargetElapsedTime check in Game.Tick()!" }
+$vTmpTs   = New-Object Mono.Cecil.Cil.VariableDefinition($fAccum.FieldType)
+$vDeficit = New-Object Mono.Cecil.Cil.VariableDefinition($mgMod.TypeSystem.Int64)
+$mMgTick.Body.Variables.Add($vTmpTs)
+$mMgTick.Body.Variables.Add($vDeficit)
+$mMgTick.Body.InitLocals = $true
+$tkIL = $mMgTick.Body.GetILProcessor()
+$vsSeq = @(
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldarg_0),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Call, $mGetTet),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Stloc, $vTmpTs),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldloca, $vTmpTs),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Call, $mTsTicks),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldarg_0),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldflda, $fAccum),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Call, $mTsTicks),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Sub),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Stloc, $vDeficit),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldloc, $vDeficit),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldc_I4_0),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Conv_I8),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ble, $vsyncAnchor),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldloc, $vDeficit),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldc_I4, [int]20000),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Conv_I8),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Bgt, $vsyncAnchor),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldarg_0),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Ldloc, $vTmpTs),
+    $tkIL.Create([Mono.Cecil.Cil.OpCodes]::Stfld, $fAccum)
+)
+foreach ($ins in $vsSeq) { $tkIL.InsertBefore($vsyncAnchor, $ins) }
+Write-Host "  iOS 60Hz VSync Smoothness Fix (MonoGame): Injected 2.0ms VSync frame-pacing snap in Game.Tick()!"
 
 $mgAsm.Write($outMG)
 $mgAsm.Dispose()

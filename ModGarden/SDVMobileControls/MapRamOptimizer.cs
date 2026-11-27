@@ -118,6 +118,14 @@ namespace SDVMobileControls
             RunPrune(keepRecentOffscreen: 1, runGc: false, blockingGc: false, reason: "DayStarted");
         }
 
+        public void OnReturnedToTitle()
+        {
+            _knownTileSheetKeys.Clear();
+            _lastUsedSeq.Clear();
+            _warpSeq = 0;
+            _lastWarpPruneMs = 0;
+        }
+
         /// <summary>
         /// Verifies core world/fishing/water textures (bobbers, cursors, animations, and active map tilesheets)
         /// are never disposed/corrupted on iOS OpenGL ES, auto-healing any stale GPU texture handle cleanly.
@@ -256,7 +264,10 @@ namespace SDVMobileControls
                 var currentLoc = Game1.currentLocation;
                 void RefreshNpc(NPC ch, bool isLocalOrEvent)
                 {
-                    if (ch == null || ch.portraitOverridden)
+                    if (ch == null || ch.portraitOverridden ||
+                        ch is StardewValley.Monsters.Monster ||
+                        ch is StardewValley.Characters.Pet ||
+                        ch is StardewValley.Characters.Horse)
                         return;
 
                     Texture2D curTex = _fNpcPortrait.GetValue(ch) as Texture2D;
@@ -266,13 +277,23 @@ namespace SDVMobileControls
                         string curNorm = curTex != null ? NormalizeAssetKey(curTex.Name) : null;
                         if (!string.IsNullOrEmpty(curNorm) && invalidatedNormKeys.Contains(curNorm))
                             shouldRefresh = true;
-                        else if (!string.IsNullOrEmpty(ch.Name))
+                        else
                         {
-                            string baseKey = "portraits/" + ch.Name.ToLowerInvariant();
-                            if (invalidatedNormKeys.Contains(baseKey))
-                                shouldRefresh = true;
-                            else
+                            string texName = null;
+                            try { texName = ch.getTextureName(); } catch { }
+                            string[] candidates = !string.IsNullOrEmpty(texName) && !string.Equals(texName, ch.Name, StringComparison.OrdinalIgnoreCase)
+                                ? new[] { ch.Name, texName }
+                                : new[] { ch.Name };
+                            for (int ci = 0; ci < candidates.Length && !shouldRefresh; ci++)
                             {
+                                string cand = candidates[ci];
+                                if (string.IsNullOrEmpty(cand)) continue;
+                                string baseKey = "portraits/" + cand.ToLowerInvariant();
+                                if (invalidatedNormKeys.Contains(baseKey))
+                                {
+                                    shouldRefresh = true;
+                                    break;
+                                }
                                 string prefix = baseKey + "_";
                                 foreach (string ik in invalidatedNormKeys)
                                 {
@@ -293,10 +314,7 @@ namespace SDVMobileControls
                         return;
 
                     _fNpcPortrait.SetValue(ch, null);
-                    if (reloadAll)
-                    {
-                        try { ch.LastAppearanceId = null; } catch { }
-                    }
+                    try { ch.LastAppearanceId = null; } catch { }
                     refreshedNpcs++;
 
                     if (isLocalOrEvent || ReferenceEquals(ch.currentLocation, currentLoc))
@@ -337,6 +355,58 @@ namespace SDVMobileControls
 
         public static string NormalizePortraitKey(string raw) => NormalizeAssetKey(raw);
 
+        /// <summary>
+        /// Ensures villagers in a newly entered location refresh seasonal/anime Content Patcher portraits cleanly on warp
+        /// (credit @Mudkip267 for OnWarped portrait refresh &amp; LastAppearanceId reset insight).
+        /// </summary>
+        public int RefreshLocationPortraits(GameLocation loc)
+        {
+            if (!Context.IsWorldReady || loc?.characters == null || Game1.content == null)
+                return 0;
+            if (!EnsureReflection(Game1.content) || _fNpcPortrait == null)
+                return 0;
+
+            int count = 0;
+            try
+            {
+                for (int i = 0; i < loc.characters.Count; i++)
+                {
+                    NPC ch = loc.characters[i];
+                    if (ch == null || ch.portraitOverridden || !ch.IsVillager ||
+                        ch is StardewValley.Monsters.Monster ||
+                        ch is StardewValley.Characters.Pet ||
+                        ch is StardewValley.Characters.Horse)
+                        continue;
+
+                    Texture2D curTex = _fNpcPortrait.GetValue(ch) as Texture2D;
+                    if (curTex == null || curTex.IsDisposed)
+                    {
+                        _fNpcPortrait.SetValue(ch, null);
+                        try { ch.LastAppearanceId = null; } catch { }
+                        try { ch.ChooseAppearance(null); } catch { }
+                        count++;
+                    }
+                }
+            }
+            catch { }
+            return count;
+        }
+
+        private static bool IsProtectedContentPack(string uid, string name)
+        {
+            string combined = ((uid ?? "") + " " + (name ?? "")).ToLowerInvariant();
+            return combined.Contains("vietnam") ||
+                   combined.Contains("viethoa") ||
+                   combined.Contains("việt") ||
+                   combined.Contains("translation") ||
+                   combined.Contains("portrait") ||
+                   combined.Contains("anime") ||
+                   combined.Contains("seasonal") ||
+                   combined.Contains("character") ||
+                   combined.Contains("outfit") ||
+                   combined.Contains("font");
+        }
+
         private void ScanContentPatcherPacks()
         {
             if (_cpPacksScanned || _helper?.ModRegistry == null)
@@ -350,6 +420,8 @@ namespace SDVMobileControls
                         continue;
                     string packFor = mod.Manifest?.ContentPackFor?.UniqueID;
                     if (!string.Equals(packFor, "Pathoschild.ContentPatcher", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (IsProtectedContentPack(mod.Manifest?.UniqueID, mod.Manifest?.Name))
                         continue;
                     if (!string.IsNullOrEmpty(mod.Manifest.Name))
                         _cpPackNames.Add(mod.Manifest.Name);
@@ -516,7 +588,7 @@ namespace SDVMobileControls
                     }
                 }
 
-                // Protect all static Game1 Texture2D fields
+                // Protect all static Game1 Texture2D fields + Vietnamese/SpriteFont textures (credit @Mudkip267)
                 if (_game1StaticTexFields != null)
                 {
                     for (int i = 0; i < _game1StaticTexFields.Length; i++)
@@ -529,6 +601,12 @@ namespace SDVMobileControls
                         catch { }
                     }
                 }
+                try
+                {
+                    if (Game1.smallFont?.Texture != null) protectedTex.Add(Game1.smallFont.Texture);
+                    if (Game1.dialogueFont?.Texture != null) protectedTex.Add(Game1.dialogueFont.Texture);
+                }
+                catch { }
 
                 // Protect active map's Texture2Ds in Game1.mapDisplayDevice.m_tileSheetTextures
                 Dictionary<TileSheet, Texture2D> tsDict = null;
@@ -974,7 +1052,12 @@ namespace SDVMobileControls
             if (normKey.IndexOf("audio", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 normKey.IndexOf("sound", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 normKey.IndexOf("wave", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                normKey.IndexOf("music", StringComparison.OrdinalIgnoreCase) >= 0)
+                normKey.IndexOf("music", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                normKey.IndexOf("minhhien", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                normKey.IndexOf("smallfont", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                normKey.IndexOf("dialoguefont", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                normKey.IndexOf("spritefont", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                normKey.IndexOf("loosesprites/font", StringComparison.OrdinalIgnoreCase) >= 0)
                 return false;
 
             // Never touch shared global Maps/* assets held outside xTile.Map or reused on every outdoor warp

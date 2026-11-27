@@ -56,6 +56,7 @@ namespace SDVMobileControls
         public bool SafeDialogueAndTooltip { get; set; } = true;  // Fixed compact item tooltip + 2-tap safe dialogue choice confirmation
         public bool VerticalToolbar { get; set; } = false;        // Optional Mobile-style left vertical 36-slot scrollable toolbar
         public int BatterySaverFpsMode { get; set; } = 0;         // 0 = 60 FPS (default), 1 = 30 FPS, 2 = 45 FPS (keeps full 60Hz logic speed!)
+        public bool MenuFps30 { get; set; } = false;              // false = 60 FPS smooth in-game menus (default), true = 30 FPS battery saver in menus
         public float PixelOpacity { get; set; } = 1.0f;           // 0.25..1.00 opacity scale for Pixel-Art touch controls
         public bool LeftHandedMobile { get; set; } = false;       // 1-tap mirror layout for left-handed players (Joy right, Buttons left)
         public float JoyDeadzone { get; set; } = 0.11f;           // 0.05..0.25 joystick deadzone sensitivity
@@ -121,6 +122,7 @@ namespace SDVMobileControls
 
         public float NativeSafeLeftFrac { get; private set; }
         public float NativeSafeRightFrac { get; private set; }
+        public int Revision { get; private set; } = 1;
 
         public MobileConfig()
         {
@@ -156,6 +158,7 @@ namespace SDVMobileControls
             ToolbarVisibleRows = 0;
             ToolbarSide = 0;
             ToolbarY = 0.50f;
+            Revision++;
         }
 
         public CustomKeyButton AddCustomKey(string label, int keyCode)
@@ -305,8 +308,14 @@ namespace SDVMobileControls
                 string[] parts = raw.Split(',');
                 if (parts.Length >= 2)
                 {
-                    NativeSafeLeftFrac = ParseFloat(parts[0], 0f, 0f, 0.14f);
-                    NativeSafeRightFrac = ParseFloat(parts[1], 0f, 0f, 0.14f);
+                    float nl = ParseFloat(parts[0], 0f, 0f, 0.14f);
+                    float nr = ParseFloat(parts[1], 0f, 0f, 0.14f);
+                    if (Math.Abs(nl - NativeSafeLeftFrac) > 0.0001f || Math.Abs(nr - NativeSafeRightFrac) > 0.0001f)
+                    {
+                        NativeSafeLeftFrac = nl;
+                        NativeSafeRightFrac = nr;
+                        Revision++;
+                    }
                 }
             }
             catch { }
@@ -398,6 +407,7 @@ namespace SDVMobileControls
                             else if (v == "1" || v == "30" || v.Equals("true", StringComparison.OrdinalIgnoreCase)) BatterySaverFpsMode = 1;
                             else BatterySaverFpsMode = 0;
                             break;
+                        case "menufps30": MenuFps30 = ParseBool(v, false); break;
                         case "pixelopacity": PixelOpacity = ParseFloat(v, 1.0f, 0.25f, 1.00f); break;
                         case "lefthanded": LeftHandedMobile = ParseBool(v, false); break;
                         case "joydeadzone": JoyDeadzone = ParseFloat(v, 0.11f, 0.05f, 0.25f); break;
@@ -457,6 +467,7 @@ namespace SDVMobileControls
 
                 if (!sawTouchHint2)
                     ShowTouchHint = false;
+                Revision++;
             }
             catch
             {
@@ -520,6 +531,7 @@ namespace SDVMobileControls
                 sb.AppendLine($"safedialogue={(SafeDialogueAndTooltip ? 1 : 0)}");
                 sb.AppendLine($"verticaltb={(VerticalToolbar ? 1 : 0)}");
                 sb.AppendLine($"saver30fps={Math.Clamp(BatterySaverFpsMode, 0, 2)}");
+                sb.AppendLine($"menufps30={(MenuFps30 ? 1 : 0)}");
                 sb.AppendLine($"pixelopacity={PixelOpacity.ToString("0.00", CultureInfo.InvariantCulture)}");
                 sb.AppendLine($"lefthanded={(LeftHandedMobile ? 1 : 0)}");
                 sb.AppendLine($"joydeadzone={JoyDeadzone.ToString("0.00", CultureInfo.InvariantCulture)}");
@@ -562,6 +574,7 @@ namespace SDVMobileControls
 
                 File.WriteAllText(_path, sb.ToString());
                 _lastWriteUtc = File.GetLastWriteTimeUtc(_path);
+                Revision++;
             }
             catch
             {

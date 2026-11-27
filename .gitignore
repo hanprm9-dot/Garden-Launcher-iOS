@@ -8,6 +8,8 @@
 build/
 dist/
 out/
+bin/
+obj/
 
 # Copyrighted game files & third-party mod archives (NEVER commit!)
 *.xnb

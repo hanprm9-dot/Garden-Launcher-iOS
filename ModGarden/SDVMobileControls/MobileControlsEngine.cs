@@ -27,6 +27,39 @@ namespace SDVMobileControls
         private PadBridge _bridge;
         private bool _loggedFirstIntercept;
 
+        // Cached delegate instances (eliminates 5+ heap allocations per frame in Menu/Gameplay!)
+        private readonly Func<Vector2, Vector2> _fnRawToVp;
+        private readonly Func<Vector2, Point> _fnVpToUi;
+        private readonly Func<Point, Vector2> _fnUiToVp;
+
+        // Menu pad neutralization guard (avoids 60Hz ForwardInputToGame reflection storm while dragging in Backpack!)
+        private bool _menuPadNeutralized;
+
+        // Dirty-checked ComputeLayout() cache (avoids running 290-line layout math 120x/sec!)
+        private bool _layoutValid;
+        private int _layoutVpW;
+        private int _layoutVpH;
+        private int _layoutCfgRev;
+        private MobileControlMode _layoutEffMode;
+        private bool _layoutCollapsed;
+        private bool _layoutIsMp;
+        private int _layoutMaxItems;
+        private int _layoutUiW;
+        private int _layoutUiH;
+        private int _layoutTbTopY;
+        private Toolbar _cachedHudToolbar;
+
+        // Cached hold-to-tool intent per touch press (avoids per-frame world scan during 0.14-0.28s hold windup!)
+        private bool _tapPressIntentComputed;
+        private Vector2 _tapPressStartWorld;
+        private Point _tapPressStartTile;
+        private TileIntent _tapPressHoldIntent;
+
+        // Movement stick smoother + 8-way Schmitt-trigger hysteresis around TouchVirtualPad's 0.25f cutoff
+        private Vector2 _smoothedStick;
+        private int _hystAxisX;
+        private int _hystAxisY;
+
         // Textures (created lazily on GPU thread)
         private Texture2D _pixel;
         private Texture2D _circle;
@@ -324,6 +357,7 @@ namespace SDVMobileControls
         private int _safeLeftPx;
         private int _safeRightPx;
         private int _saverFrameCounter;
+        private bool _wasNativeGardenOpen;
 
         // Safe periodic AutoSave state (default OFF, skips combat/mines/moving)
         private double _lastAutoSaveSec = -1;
@@ -405,6 +439,42 @@ namespace SDVMobileControls
             _cfg = cfg;
             _monitor = monitor;
             _saveSlots = new MobileSaveSlotManager(modDir, monitor);
+            _fnRawToVp = MapRawToViewport;
+            _fnVpToUi = ViewportToUi;
+            _fnUiToVp = UiToViewport;
+        }
+
+        public void OnReturnedToTitle()
+        {
+            if (_editMode) ExitEditLayoutMode();
+            if (_saveMenuOpen) CloseSaveMenu(flushExternal: false);
+            SetGuiHidden(false);
+            ResetGameplayState();
+            ResetMenuTapState();
+            ClearCustomButtonTouches();
+            _invShop.Reset();
+            _minigamePad.Reset();
+            _verticalToolbar.ClearCachedToolbar();
+            _cachedHudToolbar = null;
+            _layoutValid = false;
+            _menuPadNeutralized = false;
+            _inCombatAutoSwitched = false;
+            _combatManualOverrideLoc = null;
+            _gamepadHideHud = false;
+            _hasPhysicalGamePadState = false;
+            _lastLocationName = null;
+            _lastAutoSaveSec = -1;
+            _idleSinceSec = -1;
+            _lastAutoSaveTimeOfDay = -1;
+            _lastAutoSaveLoc = null;
+            _worldReadyTicks = 0;
+            _lastMenuMouseRaw = null;
+            _carpenterPreviewMenu = null;
+            _hasCarpenterPreview = false;
+            _junimoHoverMenu = null;
+            _junimoHoveredSlot = null;
+            _dlgHoverMenu = null;
+            _dlgHoveredIdx = -1;
         }
 
         public void OnGameSaved()
@@ -899,6 +969,10 @@ namespace SDVMobileControls
             _tapChargingTool = false;
             _tapHoldSwinging = false;
             _tapHoldCooldown = 0;
+            _tapPressIntentComputed = false;
+            _smoothedStick = Vector2.Zero;
+            _hystAxisX = 0;
+            _hystAxisY = 0;
             _slingshotTouchId = -1;
             _toolbarTouchId = -1;
             _toolbarTappedSlot = -1;
@@ -1584,10 +1658,29 @@ namespace SDVMobileControls
             // 4. Safe Area Notch/Dynamic Island padding for DayTimeMoneyBox (live bidirectional!)
             ApplySafeAreaToDayTimeMoneyBox();
 
+            // 4b. Sync In-Game Menu FPS preference (60 FPS default vs 30 FPS battery saver) + Native Mod Garden 60/120 FPS pause bridge
+            _bridge?.SyncMenuFrameThrottling(_cfg.MenuFps30);
+            ModEntry.SyncNativeMultiplayerFlag(Context.IsMultiplayer);
+            bool nativeGardenOpen = ModEntry.IsNativeGardenOpen();
+            if (nativeGardenOpen)
+            {
+                // In Multiplayer Co-op the CADisplayLink keeps ticking for network sync; suppress hidden OpenGL draw behind Mod Garden!
+                try { GameRunner.instance?.SuppressDraw(); } catch { }
+                _wasNativeGardenOpen = true;
+                return;
+            }
+            if (_wasNativeGardenOpen)
+            {
+                _wasNativeGardenOpen = false;
+                try { GameRunner.instance?.ResetElapsedTime(); } catch { }
+            }
+
             // 5. Optional Battery Saver FPS render cap (1 = 30 FPS [draw 1/2], 2 = 45 FPS [draw 3/4]; preserves 100% 60Hz logic speed; auto-suspends for Fishing/minigames/fades!)
             bool fishingCastAnim = Context.IsWorldReady && Game1.player?.CurrentTool is FishingRod frCast && (frCast.isTimingCast || frCast.isCasting);
+            bool menuAlreadyAt30 = _cfg.MenuFps30 && Game1.activeClickableMenu != null && !(Game1.activeClickableMenu is BobberBar);
             int ecoMode = _cfg.BatterySaverFpsMode;
             if (ecoMode > 0 &&
+                !menuAlreadyAt30 &&
                 !_editMode && !_saveMenuOpen &&
                 !fishingCastAnim &&
                 Game1.currentMinigame == null &&
@@ -2454,8 +2547,6 @@ namespace SDVMobileControls
 
         public bool UpdateInMenu(object pad, GameTime gameTime)
         {
-            _cfg.PollReload();
-            ApplyLiveUiScaleAndWeather();
             if (_editMode)
                 ExitEditLayoutMode();
             _keyPickerOpen = false;
@@ -2734,10 +2825,10 @@ namespace SDVMobileControls
             // If Mobile Buy/Sell/Split/Crafting Popup is open OR dragging an item, give it top priority!
             if (_invShop.IsPopupOpen || (_cfg.MobileShopAndDrag && _invShop.IsDraggingItem))
             {
-                if (_invShop.Update(topMenu, touches, MapRawToViewport, ViewportToUi, UiToViewport, _vpW, _vpH, nowSec))
+                if (_invShop.Update(topMenu, touches, _fnRawToVp, _fnVpToUi, _fnUiToVp, _vpW, _vpH, nowSec))
                 {
                     ResetMenuTapState();
-                    ApplyToPad(pad, Vector2.Zero, false, false, false);
+                    NeutralizeMenuPad(pad);
                     return true;
                 }
             }
@@ -2847,12 +2938,14 @@ namespace SDVMobileControls
             // Drives ALL mod menus via TRUE Simulated Mouse (Mouse.GetState / InputState / SMAPI ButtonPressed) + Horizontal Slider Drag + Vertical Swipe Scroll + Long-Press Right-Click!
             if (isThirdParty)
             {
+                _menuPadNeutralized = false;
                 _invShop.Reset();
                 UpdateThirdPartyModMenu(pad, topMenu, touches, nowSec);
                 return true;
             }
             if (topMenu is GameMenu gmSub && IsThirdPartyGameMenuPageTap(gmSub, touches))
             {
+                _menuPadNeutralized = false;
                 _invShop.Reset();
                 UpdateThirdPartyModMenu(pad, topMenu, touches, nowSec);
                 return true;
@@ -2862,10 +2955,10 @@ namespace SDVMobileControls
             // NEVER let legacy PC split flags kill MobileShopAndDrag when Mobile mode is enabled!
             if (_cfg.MobileShopAndDrag)
             {
-                if (_invShop.Update(topMenu, touches, MapRawToViewport, ViewportToUi, UiToViewport, _vpW, _vpH, nowSec))
+                if (_invShop.Update(topMenu, touches, _fnRawToVp, _fnVpToUi, _fnUiToVp, _vpW, _vpH, nowSec))
                 {
                     ResetMenuTapState();
-                    ApplyToPad(pad, Vector2.Zero, false, false, false);
+                    NeutralizeMenuPad(pad);
                     return true;
                 }
             }
@@ -2874,6 +2967,7 @@ namespace SDVMobileControls
                 _invShop.Reset();
             }
 
+            _menuPadNeutralized = false;
             // 3. Universal Direct Vanilla Menu Touch Handler with Global Mouse Sync!
             if (touches.Count == 0)
             {
@@ -4132,13 +4226,12 @@ namespace SDVMobileControls
                 DrawCustomKeyButtons(sb);
 
             if (showInvShop)
-                _invShop.Draw(sb, _pixel, _circle, br, topMenu, UiToViewport, ViewportToUi, _vpW, _vpH, _cfg.SafeDialogueAndTooltip);
+                _invShop.Draw(sb, _pixel, _circle, br, topMenu, _fnUiToVp, _fnVpToUi, _vpW, _vpH, _cfg.SafeDialogueAndTooltip);
         }
 
         public void UpdateGameplay(object pad, GameTime gameTime)
         {
-            _cfg.PollReload();
-            ApplyLiveUiScaleAndWeather();
+            _menuPadNeutralized = false;
             _invShop.Reset();
             if (_wasInMenu || EffectiveMode != _lastModeSeen)
             {
@@ -4174,7 +4267,7 @@ namespace SDVMobileControls
                     br?.ResetVirtualPad(pad);
                     return;
                 }
-                Vector2 mgStick = _minigamePad.Update(arcadeKind, mgTouches, MapRawToViewport, _vpW, _vpH);
+                Vector2 mgStick = _minigamePad.Update(arcadeKind, mgTouches, _fnRawToVp, _vpW, _vpH);
                 Point? mgMouseRaw = null;
                 if (_minigamePad.MousePos.HasValue)
                     mgMouseRaw = ViewportToRaw(new Vector2(_minigamePad.MousePos.Value.X, _minigamePad.MousePos.Value.Y));
@@ -4709,10 +4802,17 @@ namespace SDVMobileControls
                             }
                             else
                             {
-                                // Check if finger is holding on a mineable/choppable/diggable target (Stardew Mobile Hold-to-Mine/Chop/Dig!)
-                                Vector2 startWorld = ViewportToWorld(_tapStartScreen);
-                                Point startTile = new Point((int)Math.Floor(startWorld.X / 64f), (int)Math.Floor(startWorld.Y / 64f));
-                                TileIntent holdIntent = AutoToolAndCombat.InspectHoldToolTarget(Game1.currentLocation, startTile, Game1.player, _cfg.AutoTool);
+                                // Check if finger is holding on a mineable/choppable/diggable target (cached once per touch press!)
+                                if (!_tapPressIntentComputed)
+                                {
+                                    _tapPressStartWorld = ViewportToWorld(_tapStartScreen);
+                                    _tapPressStartTile = new Point((int)Math.Floor(_tapPressStartWorld.X / 64f), (int)Math.Floor(_tapPressStartWorld.Y / 64f));
+                                    _tapPressHoldIntent = AutoToolAndCombat.InspectHoldToolTarget(Game1.currentLocation, _tapPressStartTile, Game1.player, _cfg.AutoTool);
+                                    _tapPressIntentComputed = true;
+                                }
+                                Vector2 startWorld = _tapPressStartWorld;
+                                Point startTile = _tapPressStartTile;
+                                TileIntent holdIntent = _tapPressHoldIntent;
                                 bool isHoldToolTarget = holdIntent.Kind == TileActionKind.UseTool;
 
                                 // Keep 3x1 / 5x1 / 3x3 / 6x3 / 5x5 charge hold for upgraded Hoe (dirt) or upgraded WateringCan (crops/ground)
@@ -4901,6 +5001,7 @@ namespace SDVMobileControls
                         _tapChargingTool = false;
                         _tapHoldSwinging = false;
                         _tapHoldCooldown = 0;
+                        _tapPressIntentComputed = false;
                         sawTap = true;
 
                         // Tap-to-Move Instant Fishing Rod Charge:
@@ -4936,7 +5037,7 @@ namespace SDVMobileControls
             if (!sawJoy) { _joyTouchId = -1; _joyActivated = false; }
             if (!sawTool) _toolTouchId = -1;
             if (!sawInteract) _interactTouchId = -1;
-            if (!sawTap) { _tapTouchId = -1; _holdWalking = false; _tapChargingTool = false; _tapHoldSwinging = false; _tapHoldCooldown = 0; }
+            if (!sawTap) { _tapTouchId = -1; _holdWalking = false; _tapChargingTool = false; _tapHoldSwinging = false; _tapHoldCooldown = 0; _tapPressIntentComputed = false; }
             if (!sawSlingshot) _slingshotTouchId = -1;
 
             _toolPressed = sawTool || _tapChargingTool;
@@ -5419,7 +5520,7 @@ namespace SDVMobileControls
             {
                 Point aimRaw = new Point((int)_slingshotRawPos.X, (int)_slingshotRawPos.Y);
                 try { Game1.lastCursorMotionWasMouse = true; } catch { }
-                EnsureBridge(pad)?.ApplyInputWithMouse(pad, stickVec, true, false, false, aimRaw, true, false, _rawW, _rawH);
+                EnsureBridge(pad)?.ApplyInputWithMouse(pad, StabilizeMoveStick(stickVec), true, false, false, aimRaw, true, false, _rawW, _rawH);
             }
             else if (_slingshotReleaseHoldFrames > 0)
             {
@@ -5427,12 +5528,15 @@ namespace SDVMobileControls
                 _slingshotReleaseHoldFrames--;
                 Point aimRaw = new Point((int)_slingshotRawPos.X, (int)_slingshotRawPos.Y);
                 try { Game1.lastCursorMotionWasMouse = true; } catch { }
-                EnsureBridge(pad)?.ApplyInputWithMouse(pad, stickVec, false, false, false, aimRaw, false, false, _rawW, _rawH);
+                EnsureBridge(pad)?.ApplyInputWithMouse(pad, StabilizeMoveStick(stickVec), false, false, false, aimRaw, false, false, _rawW, _rawH);
             }
             else if ((_toolPressed || _tapChargingTool) && Game1.player?.CurrentTool is FishingRod timingRod && timingRod.isTimingCast)
             {
                 // Keep BOTH ButtonX (Keys.C / useToolButton) AND MouseState.LeftButton == Pressed continuously
                 // from Frame 1 while charging cast power so FishingRod.tickUpdate never prematurely casts!
+                _smoothedStick = Vector2.Zero;
+                _hystAxisX = 0;
+                _hystAxisY = 0;
                 Point holdPos = new Point(Math.Max(1, _rawW / 2), Math.Max(1, _rawH / 2));
                 EnsureBridge(pad)?.ApplyInputWithMouse(pad, Vector2.Zero, true, false, false, holdPos, true, false, _rawW, _rawH);
                 Game1.lastCursorMotionWasMouse = false;
@@ -5441,7 +5545,7 @@ namespace SDVMobileControls
             {
                 if (fireX)
                     Game1.lastCursorMotionWasMouse = false;
-                ApplyToPad(pad, stickVec, fireX, fireA, false);
+                ApplyToPad(pad, StabilizeMoveStick(stickVec), fireX, fireA, false);
             }
         }
 
@@ -5924,6 +6028,77 @@ namespace SDVMobileControls
         private void ApplyToPad(object pad, Vector2 stick, bool btnX, bool btnA, bool btnMenu)
         {
             EnsureBridge(pad)?.ApplyInput(pad, stick, btnX, btnA, btnMenu);
+        }
+
+        private void NeutralizeMenuPad(object pad)
+        {
+            if (_menuPadNeutralized && !HasActiveExtraKeys())
+                return;
+            ApplyToPad(pad, Vector2.Zero, false, false, false);
+            _menuPadNeutralized = !HasActiveExtraKeys();
+        }
+
+        /// <summary>
+        /// Eliminates 8-way digital axis chatter around TouchVirtualPad's hard ±0.25f WASD/DPad cutoff
+        /// while preserving 0ms stop latency and 0ms sharp-reversal response.
+        /// </summary>
+        private Vector2 StabilizeMoveStick(Vector2 rawStick)
+        {
+            if (rawStick.LengthSquared() < 0.001f)
+            {
+                _smoothedStick = Vector2.Zero;
+                _hystAxisX = 0;
+                _hystAxisY = 0;
+                return Vector2.Zero;
+            }
+
+            // Instant snap on start or sharp >90-degree direction reversal (0ms turn latency)
+            if (_smoothedStick.LengthSquared() < 0.001f || Vector2.Dot(rawStick, _smoothedStick) < 0f)
+                _smoothedStick = rawStick;
+            else
+                _smoothedStick = _smoothedStick * 0.28f + rawStick * 0.72f;
+
+            float x = _smoothedStick.X;
+            float y = _smoothedStick.Y;
+            float ax = Math.Abs(x);
+            float ay = Math.Abs(y);
+
+            // Schmitt-trigger hysteresis around 0.25f: enter at >=0.28f, hold until <=0.18f
+            if (_hystAxisX == 0)
+            {
+                if (ax >= 0.28f) _hystAxisX = x > 0f ? 1 : -1;
+            }
+            else
+            {
+                if (ax <= 0.18f || Math.Sign(x) != _hystAxisX)
+                    _hystAxisX = ax >= 0.28f ? (x > 0f ? 1 : -1) : 0;
+            }
+
+            if (_hystAxisY == 0)
+            {
+                if (ay >= 0.28f) _hystAxisY = y > 0f ? 1 : -1;
+            }
+            else
+            {
+                if (ay <= 0.18f || Math.Sign(y) != _hystAxisY)
+                    _hystAxisY = ay >= 0.28f ? (y > 0f ? 1 : -1) : 0;
+            }
+
+            // Never stall when player is actively pushing slightly below 0.28 on both axes
+            if (_hystAxisX == 0 && _hystAxisY == 0)
+            {
+                if (ax >= ay) _hystAxisX = x >= 0f ? 1 : -1;
+                else _hystAxisY = y >= 0f ? 1 : -1;
+            }
+
+            float outX = _hystAxisX != 0
+                ? _hystAxisX * Math.Max(ax, 0.32f)
+                : Math.Clamp(x, -0.18f, 0.18f);
+            float outY = _hystAxisY != 0
+                ? _hystAxisY * Math.Max(ay, 0.32f)
+                : Math.Clamp(y, -0.18f, 0.18f);
+
+            return new Vector2(outX, outY);
         }
 
         private bool HitTestToolZone(Vector2 vp, Point vpPt)
@@ -6475,28 +6650,89 @@ namespace SDVMobileControls
             Vector2 playerCenter = who.GetBoundingBox().Center.ToVector2();
             Vector2 diff = wpCenter - playerCenter;
 
-            bool isFinalCardinalStop = (_pathIdx == _path.Count - 1) && _pendingIntent.PreferCardinal && _pendingIntent.Kind != TileActionKind.None;
-            float arrivalRadius = isFinalCardinalStop ? 11f : 16f;
-            if (diff.Length() <= arrivalRadius ||
-                (isFinalCardinalStop && _stuckFrames >= 12 &&
-                 Math.Abs(who.TilePoint.X - _targetTile.X) + Math.Abs(who.TilePoint.Y - _targetTile.Y) == 1))
+            bool isFinal = (_pathIdx == _path.Count - 1);
+            bool isFinalCardinalStop = isFinal && _pendingIntent.PreferCardinal && _pendingIntent.Kind != TileActionKind.None;
+            float arrivalRadius = isFinal ? (isFinalCardinalStop ? 11f : 14f) : 24f;
+
+            // Advance waypoint cleanly when within arrival radius OR already passed intermediate waypoint toward next tile
+            while (_pathIdx < _path.Count)
             {
-                _pathIdx++;
-                if (_pathIdx >= _path.Count)
+                bool curFinal = (_pathIdx == _path.Count - 1);
+                bool curFinalCard = curFinal && _pendingIntent.PreferCardinal && _pendingIntent.Kind != TileActionKind.None;
+                float curRad = curFinal ? (curFinalCard ? 11f : 14f) : 24f;
+                bool passedIntermediate = false;
+                if (!curFinal && diff.LengthSquared() <= 42f * 42f)
                 {
-                    CompletePathArrival();
-                    return Vector2.Zero;
+                    Point nextWp = _path[_pathIdx + 1];
+                    Vector2 seg = new Vector2((nextWp.X - wp.X) * 64f, (nextWp.Y - wp.Y) * 64f);
+                    if (Vector2.Dot(diff, seg) <= 0f)
+                        passedIntermediate = true;
                 }
-                wp = _path[_pathIdx];
-                wpCenter = new Vector2(wp.X * 64f + 32f, wp.Y * 64f + 32f);
-                diff = wpCenter - playerCenter;
+
+                if (diff.Length() <= curRad || passedIntermediate ||
+                    (curFinalCard && _stuckFrames >= 12 &&
+                     Math.Abs(who.TilePoint.X - _targetTile.X) + Math.Abs(who.TilePoint.Y - _targetTile.Y) == 1))
+                {
+                    _pathIdx++;
+                    if (_pathIdx >= _path.Count)
+                    {
+                        CompletePathArrival();
+                        return Vector2.Zero;
+                    }
+                    wp = _path[_pathIdx];
+                    wpCenter = new Vector2(wp.X * 64f + 32f, wp.Y * 64f + 32f);
+                    diff = wpCenter - playerCenter;
+                }
+                else
+                {
+                    break;
+                }
             }
 
-            if (diff.LengthSquared() < 1f)
+            // Lookahead Path Smoothing: aim along collinear straight runs (up to 3 tiles ahead)
+            // and gently round open L-corners so movement glides smoothly instead of snapping tile-by-tile!
+            Vector2 aimTarget = wpCenter;
+            if (_pathIdx + 1 < _path.Count)
+            {
+                Point next1 = _path[_pathIdx + 1];
+                int sdx = next1.X - wp.X;
+                int sdy = next1.Y - wp.Y;
+                int lookIdx = _pathIdx;
+                int maxLook = Math.Min(_path.Count - 1, _pathIdx + 3);
+                while (lookIdx < maxLook)
+                {
+                    Point a = _path[lookIdx];
+                    Point b = _path[lookIdx + 1];
+                    if (b.X - a.X == sdx && b.Y - a.Y == sdy)
+                        lookIdx++;
+                    else
+                        break;
+                }
+                if (lookIdx > _pathIdx)
+                {
+                    Point farWp = _path[lookIdx];
+                    aimTarget = new Vector2(farWp.X * 64f + 32f, farWp.Y * 64f + 32f);
+                }
+                else if (diff.LengthSquared() <= 40f * 40f && Game1.currentLocation != null)
+                {
+                    // Mild corner-rounding blend ONLY if both orthogonal bridge tiles between player & next1 are walkable (never clips corners!)
+                    Point pt = who.TilePoint;
+                    if (Math.Abs(next1.X - pt.X) <= 1 && Math.Abs(next1.Y - pt.Y) <= 1 &&
+                        PathFinder.IsTileWalkable(Game1.currentLocation, next1.X, pt.Y, who) &&
+                        PathFinder.IsTileWalkable(Game1.currentLocation, pt.X, next1.Y, who))
+                    {
+                        Vector2 nextCenter = new Vector2(next1.X * 64f + 32f, next1.Y * 64f + 32f);
+                        aimTarget = Vector2.Lerp(wpCenter, nextCenter, 0.35f);
+                    }
+                }
+            }
+
+            Vector2 steer = aimTarget - playerCenter;
+            if (steer.LengthSquared() < 1f)
                 return Vector2.Zero;
 
-            diff.Normalize();
-            return diff;
+            steer.Normalize();
+            return steer;
         }
 
         private void CompletePathArrival()
@@ -7489,8 +7725,62 @@ namespace SDVMobileControls
             return _vpW > 0 && _vpH > 0;
         }
 
-        private void ComputeLayout()
+        private int PeekToolbarTopUiY()
         {
+            if (_cachedHudToolbar != null && _cachedHudToolbar.buttons != null && _cachedHudToolbar.buttons.Count >= 12)
+            {
+                if (Game1.onScreenMenus != null && Game1.onScreenMenus.Contains(_cachedHudToolbar))
+                    return _cachedHudToolbar.buttons[0].bounds.Y;
+                _cachedHudToolbar = null;
+            }
+            if (Game1.onScreenMenus != null)
+            {
+                for (int i = 0; i < Game1.onScreenMenus.Count; i++)
+                {
+                    if (Game1.onScreenMenus[i] is Toolbar tb && tb.buttons != null && tb.buttons.Count >= 12)
+                    {
+                        _cachedHudToolbar = tb;
+                        return tb.buttons[0].bounds.Y;
+                    }
+                }
+            }
+            return -1;
+        }
+
+        private void ComputeLayout(bool force = false)
+        {
+            MobileControlMode effMode = EffectiveMode;
+            bool isMp = Context.IsMultiplayer;
+            int maxItems = Game1.player != null ? Game1.player.MaxItems : 0;
+            int uiW = Game1.uiViewport.Width;
+            int uiH = Game1.uiViewport.Height;
+            int tbTopY = (!_cfg.VerticalToolbar && maxItems > 12) ? PeekToolbarTopUiY() : -1;
+
+            if (!force && !_editMode && _layoutValid &&
+                _layoutVpW == _vpW && _layoutVpH == _vpH &&
+                _layoutCfgRev == _cfg.Revision &&
+                _layoutEffMode == effMode &&
+                _layoutCollapsed == _topBarCollapsed &&
+                _layoutIsMp == isMp &&
+                _layoutMaxItems == maxItems &&
+                _layoutUiW == uiW && _layoutUiH == uiH &&
+                _layoutTbTopY == tbTopY)
+            {
+                return;
+            }
+
+            _layoutValid = !_editMode;
+            _layoutVpW = _vpW;
+            _layoutVpH = _vpH;
+            _layoutCfgRev = _cfg.Revision;
+            _layoutEffMode = effMode;
+            _layoutCollapsed = _topBarCollapsed;
+            _layoutIsMp = isMp;
+            _layoutMaxItems = maxItems;
+            _layoutUiW = uiW;
+            _layoutUiH = uiH;
+            _layoutTbTopY = tbTopY;
+
             float s = _cfg.ButtonScale;
             // On 16:9 / 19.5:9 iPhones _vpW * 0.56f >= _vpH (unchanged!); on 4:3 iPads it keeps touch buttons nicely proportioned instead of oversized!
             float unit = Math.Min(Math.Min(_vpW, _vpH), _vpW * 0.56f);

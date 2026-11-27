@@ -34,10 +34,55 @@ static CFAbsoluteTime gSdvBootStartTime = 0;
 static time_t gSdvBootStartEpoch = 0;
 static char gSdvLastSafeAreaBuf[64] = {0};
 static volatile sig_atomic_t gSdvCrashHandled = 0;
+// Async-signal-safe 16-line boot/SMAPI ring buffer for native crash diagnostics (credit @Mudkip267)
+static char gSdvRecentBootLines[16][256];
+static volatile uint32_t gSdvRecentBootIdx = 0;
 
 // ---- Live Real-Time Boot Progress Telemetry (fed directly on Main Thread by SDViOS.dll & SDVMobileControls!) ----
 static os_unfair_lock gBootTelLock = OS_UNFAIR_LOCK_INIT;
 static volatile int32_t gSdvBootDone = 0;
+static volatile int32_t gSdvGardenOpenFlag = 0;
+static volatile int32_t gSdvMultiplayerActive = 0;
+static __weak CADisplayLink *gSdvGameDisplayLink = nil;
+static BOOL gSdvPausedGameLinkForGarden = NO;
+
+static void sdvApplyGameDisplayLinkPauseForGarden(BOOL gardenOpen) {
+    CADisplayLink *dl = gSdvGameDisplayLink;
+    if (!dl) return;
+    if (gardenOpen) {
+        if (gSdvBootDone && __atomic_load_n(&gSdvMultiplayerActive, __ATOMIC_RELAXED) == 0) {
+            if (!dl.paused) {
+                dl.paused = YES;
+                gSdvPausedGameLinkForGarden = YES;
+            }
+        }
+    } else {
+        if (gSdvPausedGameLinkForGarden) {
+            gSdvPausedGameLinkForGarden = NO;
+            dl.paused = NO;
+        }
+    }
+}
+
+__attribute__((visibility("default")))
+int32_t sdv_is_garden_open(void) {
+    return __atomic_load_n(&gSdvGardenOpenFlag, __ATOMIC_RELAXED);
+}
+
+__attribute__((visibility("default")))
+void sdv_register_game_display_link(void *dlPtr) {
+    gSdvGameDisplayLink = dlPtr ? (__bridge CADisplayLink *)dlPtr : nil;
+    if (gSdvGameDisplayLink && __atomic_load_n(&gSdvGardenOpenFlag, __ATOMIC_RELAXED) != 0) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            sdvApplyGameDisplayLinkPauseForGarden(__atomic_load_n(&gSdvGardenOpenFlag, __ATOMIC_RELAXED) != 0);
+        });
+    }
+}
+
+__attribute__((visibility("default")))
+void sdv_set_multiplayer_active(int32_t isMp) {
+    __atomic_store_n(&gSdvMultiplayerActive, isMp ? 1 : 0, __ATOMIC_RELAXED);
+}
 static volatile int32_t gBootSmapiStarted = 0;
 static double gBootLivePct = 0.02;
 static NSInteger gBootLiveStep = 0;
@@ -112,6 +157,23 @@ static void sdvSignalCrashHandler(int sig, siginfo_t *info, void *ucontext) {
         void *frames[64];
         int count = backtrace(frames, 64);
         if (count > 0) backtrace_symbols_fd(frames, count, fd);
+        uint32_t curIdx = __atomic_load_n(&gSdvRecentBootIdx, __ATOMIC_RELAXED);
+        if (curIdx > 0) {
+            const char *rh = "Recent Boot/SMAPI Logs:\n";
+            (void)write(fd, rh, strlen(rh));
+            uint32_t total = curIdx < 16 ? curIdx : 16;
+            uint32_t start = curIdx - total;
+            for (uint32_t k = 0; k < total; k++) {
+                const char *line = gSdvRecentBootLines[(start + k) & 15u];
+                size_t l = 0;
+                while (l < 255 && line[l] != '\0') l++;
+                if (l > 0) {
+                    (void)write(fd, "  ", 2);
+                    (void)write(fd, line, l);
+                    (void)write(fd, "\n", 1);
+                }
+            }
+        }
         fsync(fd);
         close(fd);
     }
@@ -2522,6 +2584,13 @@ static void sdvExtSetGardenOpen(BOOL open);
     }
     if (gSdvGardenHost) {
         [gSdvGardenHost attachToGameWindows];
+        if ([gSdvGardenHost isGardenOpen]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (gSdvGardenHost && [gSdvGardenHost isGardenOpen]) {
+                    sdvApplyGameDisplayLinkPauseForGarden(YES);
+                }
+            });
+        }
     }
 }
 
@@ -3311,6 +3380,8 @@ static void sdvExtSetGardenOpen(BOOL open);
     [gw makeKeyAndVisible];
     self.gardenWindow = gw;
     sdvExtSetGardenOpen(YES);
+    __atomic_store_n(&gSdvGardenOpenFlag, 1, __ATOMIC_RELEASE);
+    sdvApplyGameDisplayLinkPauseForGarden(YES);
     sdvBootLog("[BOOT 7] Mod Garden overlay window opened");
 
     [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
@@ -3323,6 +3394,8 @@ static void sdvExtSetGardenOpen(BOOL open);
     if (!gw) return;
     self.gardenWindow = nil;
     sdvExtSetGardenOpen(NO);
+    __atomic_store_n(&gSdvGardenOpenFlag, 0, __ATOMIC_RELEASE);
+    sdvApplyGameDisplayLinkPauseForGarden(NO);
     [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
         gw.alpha = 0.0;
     } completion:^(BOOL finished) {
@@ -3734,7 +3807,24 @@ int32_t sdv_is_boot_done(void) {
 
 __attribute__((visibility("default")))
 void sdv_boot_on_log(const char *utf8Line) {
-    if (gSdvBootDone || !utf8Line || !utf8Line[0]) return;
+    if (!utf8Line || !utf8Line[0]) return;
+    {
+        const char *p = utf8Line;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            size_t len = nl ? (size_t)(nl - p) : strlen(p);
+            while (len > 0 && (p[len - 1] == '\r' || p[len - 1] == ' ')) len--;
+            if (len > 0) {
+                uint32_t slot = __atomic_fetch_add(&gSdvRecentBootIdx, 1u, __ATOMIC_RELAXED) & 15u;
+                size_t copyLen = len < 255 ? len : 255;
+                memcpy(gSdvRecentBootLines[slot], p, copyLen);
+                gSdvRecentBootLines[slot][copyLen] = '\0';
+            }
+            if (!nl) break;
+            p = nl + 1;
+        }
+    }
+    if (gSdvBootDone) return;
     @autoreleasepool {
         BOOL major = NO;
         const char *p = utf8Line;
