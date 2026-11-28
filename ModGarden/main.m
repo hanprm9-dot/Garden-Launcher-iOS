@@ -2162,15 +2162,31 @@ static void sdvSpawnDiscordSparkleBurst(UIView *hostView, CGPoint origin, CGFloa
 
     // Mod Health & Conflict Diagnostics Card
     if (_modIssues.count) {
-        NSInteger errCnt = 0;
-        for (NSDictionary *it in _modIssues) if ([it[@"severity"] isEqualToString:@"error"]) errCnt++;
+        NSInteger errCnt = 0, warnCnt = 0, infoCnt = 0;
+        for (NSDictionary *it in _modIssues) {
+            NSString *sev = it[@"severity"];
+            if ([sev isEqualToString:@"error"]) errCnt++;
+            else if ([sev isEqualToString:@"info"]) infoCnt++;
+            else warnCnt++;
+        }
         UIStackView *diagStack = mkVStack(8);
         UIStackView *dHdr = mkHStack(8);
-        UIColor *hdrCol = (errCnt > 0) ? kTintRed : kTintOrange;
-        UIImageView *dIc = [[UIImageView alloc] initWithImage:sfIcon(errCnt > 0 ? @"exclamationmark.octagon.fill" : @"exclamationmark.triangle.fill", 17, UIImageSymbolWeightBold)];
+        UIColor *hdrCol = (errCnt > 0) ? kTintRed : ((warnCnt > 0) ? kTintOrange : kTintBlue);
+        NSString *hdrIcon = (errCnt > 0) ? @"exclamationmark.octagon.fill" : ((warnCnt > 0) ? @"exclamationmark.triangle.fill" : @"info.circle.fill");
+        NSString *hdrText = nil;
+        if (errCnt > 0 && warnCnt > 0) {
+            hdrText = [NSString stringWithFormat:@"Chẩn đoán Mod (%ld lỗi · %ld cảnh báo)", (long)errCnt, (long)warnCnt];
+        } else if (errCnt > 0) {
+            hdrText = [NSString stringWithFormat:@"Chẩn đoán Mod (%ld lỗi cần xử lý)", (long)errCnt];
+        } else if (warnCnt > 0) {
+            hdrText = [NSString stringWithFormat:@"Chẩn đoán Mod (%ld cảnh báo)", (long)warnCnt];
+        } else {
+            hdrText = [NSString stringWithFormat:@"Thông tin tương thích 0%% JIT (%ld ghi chú)", (long)infoCnt];
+        }
+        UIImageView *dIc = [[UIImageView alloc] initWithImage:sfIcon(hdrIcon, 17, UIImageSymbolWeightBold)];
         dIc.tintColor = hdrCol;
         [dIc setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-        UILabel *dTitle = mkLabel([NSString stringWithFormat:@"Chẩn đoán Mod (%lu cảnh báo / xung đột)", (unsigned long)_modIssues.count], 13.5, UIFontWeightBold, hdrCol);
+        UILabel *dTitle = mkLabel(hdrText, 13.5, UIFontWeightBold, hdrCol);
         [dHdr addArrangedSubview:dIc];
         [dHdr addArrangedSubview:dTitle];
         [diagStack addArrangedSubview:dHdr];
@@ -2178,9 +2194,11 @@ static void sdvSpawnDiscordSparkleBurst(UIView *hostView, CGPoint origin, CGFloa
         for (NSUInteger idx = 0; idx < _modIssues.count; idx++) {
             NSDictionary *it = _modIssues[idx];
             BOOL isErr = [it[@"severity"] isEqualToString:@"error"];
-            UIColor *col = isErr ? kTintRed : kTintOrange;
+            BOOL isInfo = [it[@"severity"] isEqualToString:@"info"];
+            UIColor *col = isErr ? kTintRed : (isInfo ? kTintBlue : kTintOrange);
+            NSString *rowIcon = isErr ? @"xmark.circle.fill" : (isInfo ? @"info.circle.fill" : @"exclamationmark.circle.fill");
             UIStackView *iRow = mkHStack(8);
-            UIImageView *ic = [[UIImageView alloc] initWithImage:sfIcon(isErr ? @"xmark.circle.fill" : @"exclamationmark.circle.fill", 15, UIImageSymbolWeightSemibold)];
+            UIImageView *ic = [[UIImageView alloc] initWithImage:sfIcon(rowIcon, 15, UIImageSymbolWeightSemibold)];
             ic.tintColor = col;
             [ic setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
             UIStackView *iTxt = mkVStack(1.5);

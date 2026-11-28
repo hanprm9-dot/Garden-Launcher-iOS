@@ -204,7 +204,7 @@ static NSDictionary *sdvBuildBugReportBundle(NSString *docsPath) {
 
     NSMutableArray<NSString *> *issueLines = [NSMutableArray array];
     for (NSDictionary *it in issues) {
-        NSString *sev = [it[@"severity"] isEqualToString:@"error"] ? @"ERROR" : @"WARN";
+        NSString *sev = [it[@"severity"] isEqualToString:@"error"] ? @"ERROR" : ([it[@"severity"] isEqualToString:@"info"] ? @"INFO" : @"WARN");
         [issueLines addObject:[NSString stringWithFormat:@"[%@] %@: %@", sev, it[@"title"] ?: @"", it[@"detail"] ?: @""]];
     }
     NSString *issueShort = issueLines.count ? [issueLines componentsJoinedByString:@"\n"] : @"";

@@ -16,29 +16,42 @@ function Verify-Assembly($path) {
     $a = [Mono.Cecil.AssemblyDefinition]::ReadAssembly($path)
     $mCount = 0
     foreach ($t in $a.MainModule.Types) {
-        foreach ($m in $t.Methods) {
-            if (-not $m.HasBody) { continue }
-            $mCount++
-            $set = New-Object 'System.Collections.Generic.HashSet[Mono.Cecil.Cil.Instruction]'
-            foreach ($ins in $m.Body.Instructions) { [void]$set.Add($ins) }
-            foreach ($ins in $m.Body.Instructions) {
-                if ($ins.Operand -is [Mono.Cecil.Cil.Instruction]) {
-                    if (-not $set.Contains($ins.Operand)) {
-                        throw "Broken branch target in $($t.FullName).$($m.Name)"
+        $allTypes = @($t) + @($t.NestedTypes)
+        foreach ($ct in $allTypes) {
+            foreach ($m in $ct.Methods) {
+                if (-not $m.HasBody) { continue }
+                $mCount++
+                $set = New-Object 'System.Collections.Generic.HashSet[Mono.Cecil.Cil.Instruction]'
+                foreach ($ins in $m.Body.Instructions) { [void]$set.Add($ins) }
+                foreach ($ins in $m.Body.Instructions) {
+                    if ($ins.Operand -is [Mono.Cecil.Cil.Instruction]) {
+                        if (-not $set.Contains($ins.Operand)) {
+                            throw "Broken branch target in $($ct.FullName).$($m.Name)"
+                        }
+                    } elseif ($ins.Operand -is [Mono.Cecil.FieldDefinition]) {
+                        $fd = [Mono.Cecil.FieldDefinition]$ins.Operand
+                        if ($fd.DeclaringType -ne $ct -and $fd.DeclaringType -ne $ct.DeclaringType -and $fd.IsPrivate) {
+                            throw "Illegal private field access: $($ct.FullName).$($m.Name) -> $($fd.DeclaringType.FullName).$($fd.Name)"
+                        }
+                    } elseif ($ins.Operand -is [Mono.Cecil.MethodDefinition]) {
+                        $md = [Mono.Cecil.MethodDefinition]$ins.Operand
+                        if ($md.DeclaringType -ne $ct -and $md.DeclaringType -ne $ct.DeclaringType -and $md.IsPrivate) {
+                            throw "Illegal private method access: $($ct.FullName).$($m.Name) -> $($md.DeclaringType.FullName).$($md.Name)"
+                        }
                     }
                 }
-            }
-            foreach ($eh in $m.Body.ExceptionHandlers) {
-                foreach ($pt in @($eh.TryStart, $eh.TryEnd, $eh.HandlerStart, $eh.HandlerEnd)) {
-                    if ($null -ne $pt -and -not $set.Contains($pt)) {
-                        throw "Broken EH boundary in $($t.FullName).$($m.Name)"
+                foreach ($eh in $m.Body.ExceptionHandlers) {
+                    foreach ($pt in @($eh.TryStart, $eh.TryEnd, $eh.HandlerStart, $eh.HandlerEnd)) {
+                        if ($null -ne $pt -and -not $set.Contains($pt)) {
+                            throw "Broken EH boundary in $($ct.FullName).$($m.Name)"
+                        }
                     }
                 }
             }
         }
     }
     $a.Dispose()
-    Write-Host "Verified IL & EH integrity OK: $path ($mCount methods)"
+    Write-Host "Verified IL, EH & member visibility OK: $path ($mCount methods)"
 }
 
 function Retarget-Branches($method, $oldTarget, $newTarget) {
@@ -1596,7 +1609,7 @@ if ($tRsp -and $hCreateDir -and $hPathComb3 -and $hWriteText -and $hGetMtime -an
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldarg_0))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Call, $hGetMtime))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Stloc, $vDt))
-    $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldstr, "v112|"))
+    $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldstr, "v113|"))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldarg_0))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldstr, "|"))
     $bsIL.Append($bsIL.Create([Mono.Cecil.Cil.OpCodes]::Ldloca, $vLen))
@@ -2332,6 +2345,9 @@ $tSysException = $mgMod.GetTypeReferences() | Where-Object { $_.FullName -eq "Sy
 foreach ($req in @($fTexWidth,$fTexHeight,$fActWidth,$fActHeight,$fTexFormat,$fLevelCount,$fGlTexture,$fGlLastSamp,$mGetDisposed,$mGetGD,$mDeleteGL,$mGetData1Def,$mSetData1Def,$mGetColorData,$mSetTexelW,$mSetTexelH,$mTexPlatCtor,$mGetTextures,$mTexCollDirty,$tColor,$tSysException)) {
     if (-not $req) { throw "Missing required MonoGame member for Texture2D.CopyFromTexture implementation!" }
 }
+# Ensure Texture.DeleteGLTexture is assembly-visible so subclass Texture2D.CopyFromTexture never throws MethodAccessException on resize!
+$mDeleteGL.IsPrivate = $false
+$mDeleteGL.IsAssembly = $true
 
 $mGetDataColor = New-Object Mono.Cecil.GenericInstanceMethod($mGetData1Def)
 $mGetDataColor.GenericArguments.Add($tColor)
@@ -2843,6 +2859,11 @@ if ($tXactSound -and $tSeInst -and $tAudioEng -and $tSoundBank -and $cd -and $ar
     $fXsWave      = $tXactSound.Fields | Where-Object { $_.Name -eq "_wave" }
     $fXsStreaming = $tXactSound.Fields | Where-Object { $_.Name -eq "_streaming" }
     $fXsSoundBank = $tXactSound.Fields | Where-Object { $_.Name -eq "_soundBank" }
+    # Promote private/initonly XactSound fields written by SoundBank.AddCue so Mono .NET 8 never throws FieldAccessException!
+    foreach ($pf in @($fXsVol, $fXsCueVol, $fXsReverb)) {
+        if ($pf) { $pf.IsPrivate = $false; $pf.IsAssembly = $true; $pf.IsInitOnly = $false }
+    }
+    if ($fXsCatId) { $fXsCatId.IsInitOnly = $false }
     $mXsCtor3     = $tXactSound.Methods | Where-Object { $_.Name -eq ".ctor" -and $_.Parameters.Count -eq 3 -and $_.Parameters[1].ParameterType.Name -eq "Int32" } | Select-Object -First 1
     $mXsPlay      = $tXactSound.Methods | Where-Object { $_.Name -eq "Play" -and $_.Parameters.Count -eq 2 } | Select-Object -First 1
     $mSeCreate    = $tSoundEffect.Methods | Where-Object { $_.Name -eq "CreateInstance" -and $_.Parameters.Count -eq 0 } | Select-Object -First 1

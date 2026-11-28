@@ -2265,25 +2265,7 @@ static NSSet<NSString *> *sdvExtractModHookDomains(NSString *packDir, NSString *
         }
     } @catch (NSException *ex) { }
 
-    BOOL usesHarmony = dllData.length > 0 && (sdvDataContainsAscii(dllData, "HarmonyLib") || sdvDataContainsAscii(dllData, "0Harmony"));
-    if (!usesHarmony && !hasShaderFiles) return domains;
-
-    if (usesHarmony) {
-        if (sdvDataContainsAscii(dllData, "drawWater") || sdvDataContainsAscii(dllData, "DrawWater")) {
-            [domains addObject:@"water:Mặt nước (GameLocation.drawWater)"];
-        }
-        if (sdvDataContainsAscii(dllData, "renderScreenBuffer")) {
-            [domains addObject:@"screenbuf:Hậu kỳ màn hình (Game1.renderScreenBuffer)"];
-        }
-        if (sdvDataContainsAscii(dllData, "DrawLighting") || sdvDataContainsAscii(dllData, "lightmap")) {
-            if (hasShaderFiles || sdvDataContainsAscii(dllData, "DrawLighting")) {
-                [domains addObject:@"lighting:Ánh sáng & bóng đổ (Game1.DrawLighting)"];
-            }
-        }
-        if (sdvDataContainsAscii(dllData, "BobberBar") && (sdvDataContainsAscii(dllData, "Postfix") || sdvDataContainsAscii(dllData, "Prefix") || sdvDataContainsAscii(dllData, "Transpiler"))) {
-            [domains addObject:@"fishing:Minigame câu cá (BobberBar)"];
-        }
-    }
+    (void)dllData;
     if (hasShaderFiles) {
         [domains addObject:@"shader:Hiệu ứng Shader tùy chỉnh (.mgfxo)"];
     }
@@ -2349,6 +2331,7 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
     NSMutableDictionary<NSString *, NSSet<NSString *> *> *cpLoads = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString *, NSDictionary *> *portraitPacks = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString *, NSSet<NSString *> *> *modHookDomains = [NSMutableDictionary dictionary];
+    NSMutableArray<NSString *> *harmonyMods = [NSMutableArray array];
     NSMutableSet<NSString *> *topWithManifest = [NSMutableSet set];
     NSDictionary<NSString *, NSString *> *disabledMap = disabledModsById(root);
     NSSet<NSString *> *sysIds = [NSSet setWithArray:@[@"com.deadakj.sdviostouchcontrols", @"gardenlauncher.mobilecontrols"]];
@@ -2385,10 +2368,10 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
                 addIssue([@"api:" stringByAppendingString:uidLow], @"error",
                     [NSString stringWithFormat:@"Cần SMAPI mới hơn: %@", dispName],
                     [NSString stringWithFormat:@"Yêu cầu SMAPI v%@ (Garden Launcher hiện dùng 4.5.2).", minApi], nil);
-            } else if (entryDll.length && minApi.length && sdvCompareSemver(minApi, @"3.99.0") < 0) {
+            } else if (entryDll.length && minApi.length && sdvCompareSemver(minApi, @"3.0.0") < 0) {
                 addIssue([@"legacy:" stringByAppendingString:uidLow], @"warn",
-                    [NSString stringWithFormat:@"Mod C# đời cũ (1.5): %@", dispName],
-                    [NSString stringWithFormat:@"Biên dịch cho SMAPI %@ — có thể không tương thích Stardew 1.6.15.", minApi], nil);
+                    [NSString stringWithFormat:@"Mod C# rất cũ (< SMAPI 3.0): %@", dispName],
+                    [NSString stringWithFormat:@"Khai báo SMAPI %@ — có thể không tương thích Stardew 1.6.15.", minApi], nil);
             }
             if (entryDll.length) {
                 if ([uidLow containsString:@"portraiture"] || [uidLow containsString:@"hdportraits"] || [uidLow containsString:@"hd.portraits"]) {
@@ -2408,7 +2391,7 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
                             [NSString stringWithFormat:@"Mod biên dịch riêng Android: %@", dispName],
                             [NSString stringWithFormat:@"%@ dùng SMAPI Android, có thể lỗi trên bản PC 1.6.15 — khuyên tải bản PC.", entryDll], nil);
                     }
-                    // Inform users when an active C# mod relies on 0Harmony runtime IL patching (which is a safe no-op on 0% JIT iOS)
+                    // Group Harmony C# mods into ONE calm info summary instead of spamming scary per-mod warnings!
                     BOOL isSafeHarmonyUser = [uidLow hasPrefix:@"pathoschild.contentpatcher"] ||
                                              [uidLow hasPrefix:@"spacechase0.genericmodconfigmenu"] ||
                                              [uidLow hasPrefix:@"smapi."] ||
@@ -2417,9 +2400,7 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
                                              [uidLow containsString:@"hd.portraits"] ||
                                              [uidLow isEqualToString:@"digus.mailframeworkmod"];
                     if (!isSafeHarmonyUser && (sdvDataContainsAscii(dd, "0Harmony") || sdvDataContainsAscii(dd, "HarmonyLib"))) {
-                        addIssue([@"harmony0jit:" stringByAppendingString:uidLow], @"warn",
-                            [NSString stringWithFormat:@"Mod C# dùng Harmony (0%% JIT): %@", dispName],
-                            @"Trên iOS không bật JIT, các móc nối Harmony C# (như Visible Fish, Alternative Textures, More Grass…) tự bỏ qua để tránh văng game; chỉ phần sự kiện SMAPI & gói Content Patcher ([CP]) hoạt động.", nil);
+                        if (![harmonyMods containsObject:dispName]) [harmonyMods addObject:dispName];
                     }
                     NSSet<NSString *> *doms = sdvExtractModHookDomains(packDir, entryDll, dd);
                     if (doms.count) modHookDomains[uidLow] = doms;
@@ -2600,8 +2581,9 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
             if (txt.length) {
                 BOOL inSkipped = NO;
                 NSUInteger errLinesAdded = 0;
-                for (NSString *rawLine in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-                    NSString *line = [rawLine stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                NSArray<NSString *> *logLines = [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+                for (NSUInteger li = 0; li < logLines.count; li++) {
+                    NSString *line = [logLines[li] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
                     if (!line.length) { inSkipped = NO; continue; }
                     if ([line containsString:@"ERROR SMAPI]    Skipped mods"] ||
                         [line containsString:@"ERROR SMAPI]    These mods could not be added"]) {
@@ -2624,7 +2606,7 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
                                 sdvTranslateSmapiSkipReason(reason), nil);
                         }
                     } else if (errLinesAdded < 12 && [line containsString:@" ERROR "] && ![line containsString:@"ERROR SMAPI]"]) {
-                        // Extract mod name & concise error snippet from runtime mod errors
+                        // Extract mod name & concise error snippet (include exception line if line ends with Technical/Error details:)
                         NSRange errR = [line rangeOfString:@" ERROR "];
                         if (errR.location != NSNotFound) {
                             NSString *after = [line substringFromIndex:errR.location + errR.length];
@@ -2632,7 +2614,13 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
                             if (brR.location != NSNotFound) {
                                 NSString *modSrc = [[after substringToIndex:brR.location] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
                                 NSString *msg = [after substringFromIndex:brR.location + brR.length];
-                                if (msg.length > 180) msg = [[msg substringToIndex:180] stringByAppendingString:@"…"];
+                                if (([msg hasSuffix:@"Technical details:"] || [msg hasSuffix:@"Error details:"]) && (li + 1) < logLines.count) {
+                                    NSString *nextLine = [logLines[li + 1] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                                    if (nextLine.length && ![nextLine hasPrefix:@"["]) {
+                                        msg = [NSString stringWithFormat:@"%@ %@", msg, nextLine];
+                                    }
+                                }
+                                if (msg.length > 220) msg = [[msg substringToIndex:220] stringByAppendingString:@"…"];
                                 addIssue([NSString stringWithFormat:@"rt:%@", modSrc.lowercaseString], @"error",
                                     [NSString stringWithFormat:@"Lỗi khi chạy: %@", modSrc], msg, nil);
                                 errLinesAdded++;
@@ -2643,6 +2631,20 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
             }
         }
     } @catch (NSException *ex) { }
+
+    // 6b. Consolidated calm info note for active C# mods that reference 0Harmony (no scary per-mod spam!)
+    if (harmonyMods.count > 0) {
+        [harmonyMods sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+        NSUInteger showN = MIN((NSUInteger)5, harmonyMods.count);
+        NSString *sample = [[harmonyMods subarrayWithRange:NSMakeRange(0, showN)] componentsJoinedByString:@", "];
+        if (harmonyMods.count > showN) {
+            sample = [NSString stringWithFormat:@"%@ (+%lu mod khác)", sample, (unsigned long)(harmonyMods.count - showN)];
+        }
+        addIssue(@"harmony0jit:summary", @"info",
+            [NSString stringWithFormat:@"Thông tin 0%% JIT (%lu mod C# có gọi Harmony)", (unsigned long)harmonyMods.count],
+            [NSString stringWithFormat:@"Gồm: %@. Phần sự kiện SMAPI & gói Content Patcher ([CP]) vẫn hoạt động bình thường; chỉ các móc nối Harmony C# bên trong được bỏ qua tự động để không văng game.", sample],
+            nil);
+    }
 
     // 7. Optional OTA Live Compatibility Rules (.garden/extra_mod_rules.json)
     NSString *extraRulesPath = join(sdvHiddenGardenDir(root), @"extra_mod_rules.json");
@@ -2667,11 +2669,11 @@ static NSArray<NSDictionary *> *sdvDiagnoseMods(NSString *root) {
         } @catch (NSException *ignored) { }
     }
 
-    // Sort errors first, then warnings
+    // Sort errors first, then warnings, then info notes
     [issues sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-        BOOL ea = [a[@"severity"] isEqualToString:@"error"];
-        BOOL eb = [b[@"severity"] isEqualToString:@"error"];
-        if (ea != eb) return ea ? NSOrderedAscending : NSOrderedDescending;
+        int ra = [a[@"severity"] isEqualToString:@"error"] ? 0 : ([a[@"severity"] isEqualToString:@"warn"] ? 1 : 2);
+        int rb = [b[@"severity"] isEqualToString:@"error"] ? 0 : ([b[@"severity"] isEqualToString:@"warn"] ? 1 : 2);
+        if (ra != rb) return (ra < rb) ? NSOrderedAscending : NSOrderedDescending;
         return [a[@"title"] compare:b[@"title"]];
     }];
     return issues;
@@ -2892,8 +2894,8 @@ static NSDictionary *plan(NSString *root, NSString *stage, NSArray *preferences,
         if (minApi.length) {
             if (sdvCompareSemver(minApi, @"4.5.2") > 0) {
                 [warnings addObject:[NSString stringWithFormat:@"%@ yêu cầu SMAPI v%@ (hiện tại 4.5.2).", dispName, minApi]];
-            } else if (field(m, @"EntryDll").length && sdvCompareSemver(minApi, @"3.99.0") < 0) {
-                [warnings addObject:[NSString stringWithFormat:@"%@ là mod C# đời cũ (SMAPI %@) — có thể không tương thích Stardew 1.6.15.", dispName, minApi]];
+            } else if (field(m, @"EntryDll").length && sdvCompareSemver(minApi, @"3.0.0") < 0) {
+                [warnings addObject:[NSString stringWithFormat:@"%@ là mod C# rất cũ (SMAPI %@) — có thể không tương thích Stardew 1.6.15.", dispName, minApi]];
             }
         }
         NSMutableArray *deps = [NSMutableArray array];
@@ -3165,8 +3167,8 @@ static NSDictionary *plan(NSString *root, NSString *stage, NSArray *preferences,
 // ============================================================================
 // GARDEN LAUNCHER UPDATE CHECKER + OTA HOT-PATCH ENGINE (0% IPA Re-Signing!)
 // ============================================================================
-#define kSDVAppVersion @"1.1.2"
-#define kSDVAppBuild   11200
+#define kSDVAppVersion @"1.1.3"
+#define kSDVAppBuild   11300
 static NSString *const kSDVUpdateNotification = @"SDVLauncherUpdateDidChangeNotification";
 static NSString *const kSDVDismissedUpdatePrefKey = @"sdv_dismissed_update_id";
 static NSString *const kSDVDefaultDiscordURL = @"https://discord.gg/tuTKv9xQ2Z";

@@ -4,7 +4,7 @@
   <p><b>Launcher &amp; Mod Manager cho Stardew Valley PC 1.6.15 trên iOS &amp; iPadOS</b></p>
 
   <p>
-    <a href="https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/tag/v1.1.2"><img src="https://img.shields.io/badge/Version-v1.1.2-2ea44f?style=flat-square" alt="Version v1.1.2" /></a>
+    <a href="https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/tag/v1.1.3"><img src="https://img.shields.io/badge/Version-v1.1.3-2ea44f?style=flat-square" alt="Version v1.1.3" /></a>
     <a href="https://discord.gg/tuTKv9xQ2Z"><img src="https://img.shields.io/badge/Discord-Vườn%20Bách%20Thú-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord Server" /></a>
     <img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-14%20–%2027+-007aff?style=flat-square&logo=apple&logoColor=white" alt="iOS & iPadOS 14-27+" />
     <img src="https://img.shields.io/badge/SMAPI-4.5.2-6f42c1?style=flat-square" alt="SMAPI 4.5.2" />
@@ -19,16 +19,21 @@
 
 ---
 
-## 📥 Tải xuống (`v1.1.2`)
+## 📥 Tải xuống (`v1.1.3`)
 
 | Thiết bị | Phiên bản IPA | Tải về |
 | :--- | :--- | :---: |
-| **iOS / iPadOS 14 – 18** | `Garden-Launcher-1.1.2-iOS14-18.ipa` | [**⬇️ Tải ngay**](https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.2/Garden-Launcher-1.1.2-iOS14-18.ipa) |
-| **iOS / iPadOS 26 – 27+** | `Garden-Launcher-1.1.2-iOS26-27.ipa` | [**⬇️ Tải ngay**](https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.2/Garden-Launcher-1.1.2-iOS26-27.ipa) |
+| **iOS / iPadOS 14 – 18** | `Garden-Launcher-1.1.3-iOS14-18.ipa` | [**⬇️ Tải ngay**](https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.3/Garden-Launcher-1.1.3-iOS14-18.ipa) |
+| **iOS / iPadOS 26 – 27+** | `Garden-Launcher-1.1.3-iOS26-27.ipa` | [**⬇️ Tải ngay**](https://github.com/hanprm9-dot/Garden-Launcher-iOS/releases/download/v1.1.3/Garden-Launcher-1.1.3-iOS26-27.ipa) |
 
 ---
 
-## ✨ Điểm mới nổi bật trong `v1.1.2`, `v1.1.1` & `v1.1.0`
+## ✨ Điểm mới nổi bật trong `v1.1.3`, `v1.1.2` & `v1.1.1`
+
+- **🛠️ Bản Vá Khẩn Cấp `v1.1.3` (`#GL-HCV3WF` & `#GL-MBJTCP`) — Sửa Dứt Điểm Lỗi Âm Thanh `UI Info Suite 2` / `SVE`, Lỗi Thứ Tự `GameLaunched` Của `Content Patcher`/`FTM` & Chẩn Đoán Mod Chính Xác:**
+  - **Sửa triệt để `FieldAccessException` trong `SoundBank.AddCue` & `MethodAccessException` tiềm ẩn trong `CopyFromTexture` (`#GL-HCV3WF`):** Mở quyền truy cập nội bộ (`internal`) và gỡ cờ `initonly` cho các trường `XactSound._volume`, `_cueVolume`, `_useReverb`, `_categoryID` (khôi phục 100% âm thanh tùy chỉnh `Data/AudioChanges` của **Stardew Valley Expanded** và sự kiện `GameLaunched` của **UI Info Suite 2 v2.3.7**); đồng thời mở quyền nội bộ `Texture.DeleteGLTexture` để đổi kích thước texture HD trong `Texture2D.CopyFromTexture` an toàn tuyệt đối và bổ sung bộ kiểm định tự động **0 lỗi truy cập private IL** vào quy trình build.
+  - **Sửa lỗi đệ quy `CFRunLoop` lúc khởi động làm đảo thứ tự `GameLoop.GameLaunched` (`#GL-HCV3WF`):** Ngừng bơm `CFRunLoopRunInMode(kCFRunLoopDefaultMode)` trong `sdv_boot_on_log` ngay khi `CADisplayLink` đã được đăng ký (vẫn flush thanh tiến độ mượt bằng `[CATransaction flush]`), chấm dứt hoàn toàn việc `Game1.Tick()` chen ngang giữa `GameLaunched` khiến **Content Patcher** từ chối token của **Farm Type Manager (FTM)** và các mod nạp sau.
+  - **Đại tu bộ Chẩn đoán Mod gọn gàng & chính xác (`#GL-MBJTCP`):** Gom toàn bộ danh sách mod C# có gọi `0Harmony` thành **1 thẻ thông tin màu xanh duy nhất** thay vì spam hàng chục cảnh báo màu cam gây hiểu nhầm *"không dùng được"*; chỉ đánh dấu mod C# đời cũ khi `MinimumApiVersion < 3.0.0` (không còn báo nhầm các mod 1.6 như *Polyamory Sweet 1.6.1*, *Content Patcher Animations 1.2.4*, *Producer Framework Mod 1.9.8*); loại bỏ cảnh báo giả xung đột `drawWater` giữa mod thường và shader, đồng thời hiển thị đủ dòng ngoại lệ khi mod báo lỗi trong `SMAPI-latest.txt`.
 
 - **⚡ Siêu Mượt `v1.1.2` — Mở Khóa 60/120 FPS Menu, Kéo-Thả Balô & Di Chuyển Mobile Không Khựng + 5 Cải Tiến Từ `@Mudkip267`:**
   - **Mở khóa 60 FPS mặc định cho Menu trong game & Tùy chọn `60 / 30 FPS`:** Gỡ giới hạn khóa cứng `30 FPS` mặc định khi mở Balô, Rương, Cửa hàng và thêm nút chuyển trực tiếp **`60 FPS (Mượt)` / `30 FPS (Tiết kiệm)`** trong **Mod Garden → FPS, Thời tiết & Pin** (không cần khởi động lại game).
@@ -109,8 +114,8 @@ dotnet build ModGarden\SDVMobileControls\SDVMobileControls.csproj -c Release
 powershell -ExecutionPolicy Bypass -File scripts\patch_perf_v7.ps1
 
 # 3. Đóng gói 2 bản IPA sạch (iOS / iPadOS 26–27+ & iOS / iPadOS 14–18)
-python scripts\package_embedded.py base-sdvios.ipa build\SDVModGarden_ios26 zsign.exe dist\Garden-Launcher-1.1.2-iOS26-27.ipa "$WorkDir\v7-host.dll" "$WorkDir\v7-touch.dll" "$WorkDir\Lidgren.Network.dll" --launcher --min-ios=16.0
-python scripts\package_embedded.py base-sdvios.ipa build\SDVModGarden_ios14 zsign.exe dist\Garden-Launcher-1.1.2-iOS14-18.ipa "$WorkDir\v7-host.dll" "$WorkDir\v7-touch.dll" "$WorkDir\Lidgren.Network.dll" --launcher --no-scene --min-ios=14.0
+python scripts\package_embedded.py base-sdvios.ipa build\SDVModGarden_ios26 zsign.exe dist\Garden-Launcher-1.1.3-iOS26-27.ipa "$WorkDir\v7-host.dll" "$WorkDir\v7-touch.dll" "$WorkDir\Lidgren.Network.dll" --launcher --min-ios=16.0
+python scripts\package_embedded.py base-sdvios.ipa build\SDVModGarden_ios14 zsign.exe dist\Garden-Launcher-1.1.3-iOS14-18.ipa "$WorkDir\v7-host.dll" "$WorkDir\v7-touch.dll" "$WorkDir\Lidgren.Network.dll" --launcher --no-scene --min-ios=14.0
 ```
 
 </details>

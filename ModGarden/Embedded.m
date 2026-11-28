@@ -41,6 +41,7 @@ static volatile uint32_t gSdvRecentBootIdx = 0;
 // ---- Live Real-Time Boot Progress Telemetry (fed directly on Main Thread by SDViOS.dll & SDVMobileControls!) ----
 static os_unfair_lock gBootTelLock = OS_UNFAIR_LOCK_INIT;
 static volatile int32_t gSdvBootDone = 0;
+static volatile int32_t gBootDisplayLinkLive = 0;
 static volatile int32_t gSdvGardenOpenFlag = 0;
 static volatile int32_t gSdvMultiplayerActive = 0;
 static __weak CADisplayLink *gSdvGameDisplayLink = nil;
@@ -72,6 +73,7 @@ int32_t sdv_is_garden_open(void) {
 __attribute__((visibility("default")))
 void sdv_register_game_display_link(void *dlPtr) {
     gSdvGameDisplayLink = dlPtr ? (__bridge CADisplayLink *)dlPtr : nil;
+    if (dlPtr) __atomic_store_n(&gBootDisplayLinkLive, 1, __ATOMIC_RELAXED);
     if (gSdvGameDisplayLink && __atomic_load_n(&gSdvGardenOpenFlag, __ATOMIC_RELAXED) != 0) {
         dispatch_async(dispatch_get_main_queue(), ^{
             sdvApplyGameDisplayLinkPauseForGarden(__atomic_load_n(&gSdvGardenOpenFlag, __ATOMIC_RELAXED) != 0);
@@ -3508,11 +3510,16 @@ static void sdvBootPumpMainThreadNow(BOOL forceFlush) {
                            elapsed:elapsed];
     [host.loadingVC flushToScreenNow];
 
-    gBootInRunLoopPump = YES;
-    @try {
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, false);
-    } @finally {
-        gBootInRunLoopPump = NO;
+    // CRITICAL: Never pump kCFRunLoopDefaultMode once GameHost's CADisplayLink is live!
+    // Pumping the main runloop from inside SMAPI's GameLoop.GameLaunched re-enters CADisplayLink,
+    // running Game1.Tick() / Content Patcher UpdateTicked BEFORE remaining mods finish GameLaunched!
+    if (__atomic_load_n(&gBootDisplayLinkLive, __ATOMIC_RELAXED) == 0) {
+        gBootInRunLoopPump = YES;
+        @try {
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, false);
+        } @finally {
+            gBootInRunLoopPump = NO;
+        }
     }
 }
 
@@ -3557,6 +3564,14 @@ static void sdvBootParseSingleLine(const char *s, size_t len, BOOL *outMajor) {
     size_t cpy = (len < sizeof(buf) - 1) ? len : (sizeof(buf) - 1);
     memcpy(buf, s, cpy);
     buf[cpy] = '\0';
+
+    if (strstr(buf, "Modern CADisplayLink registered") != NULL ||
+        strstr(buf, "SMAPI SCore.RunInteractively launched") != NULL ||
+        strstr(buf, "Instance_LoadContent() finished") != NULL ||
+        strstr(buf, "GameLaunched") != NULL ||
+        strstr(buf, "Frame #1:") != NULL) {
+        __atomic_store_n(&gBootDisplayLinkLive, 1, __ATOMIC_RELAXED);
+    }
 
     double newPct = 0.0;
     NSInteger newStep = -1;

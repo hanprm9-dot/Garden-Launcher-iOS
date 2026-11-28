@@ -164,7 +164,7 @@ def build(base, library, signer, output, host_dll=None, touch_dll=None, lidgren_
         prepare_binary(fw/FRAMEWORK, sig_capacity=48*1024)
         (fw/"Info.plist").write_bytes(plistlib.dumps(dict(CFBundleExecutable=FRAMEWORK,
             CFBundleName=FRAMEWORK,CFBundleIdentifier="dev.stardewmobile.gardenkit",
-            CFBundlePackageType="FMWK",CFBundleVersion="112",CFBundleShortVersionString="1.1.2",
+            CFBundlePackageType="FMWK",CFBundleVersion="113",CFBundleShortVersionString="1.1.3",
             MinimumOSVersion=min_ios,CFBundleSupportedPlatforms=["iPhoneOS"])))
         # Remove stale debug get-task-allow archived-expanded-entitlements.xcent (can conflict with Enterprise/TXM signers on iOS 26/27)
         stale_xcent = app / "archived-expanded-entitlements.xcent"
@@ -210,8 +210,8 @@ def build(base, library, signer, output, host_dll=None, touch_dll=None, lidgren_
         info = plistlib.loads((app/"Info.plist").read_bytes())
         info.update(
             MinimumOSVersion=min_ios,
-            CFBundleShortVersionString="1.1.2",
-            CFBundleVersion="1.1.2",
+            CFBundleShortVersionString="1.1.3",
+            CFBundleVersion="1.1.3",
             UIFileSharingEnabled=True,
             LSSupportsOpeningDocumentsInPlace=True,
             UIApplicationSupportsIndirectInputEvents=True,
